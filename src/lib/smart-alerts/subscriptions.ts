@@ -1,6 +1,8 @@
 import { items } from '@wix/data';
 import { auth } from '@wix/essentials';
 import { COLLECTIONS, type SubscriptionState, type SubscriptionType } from './constants';
+import { isValidE164Phone, isValidEmail } from './sanitize';
+import { queryAllPages } from './query-helpers';
 
 export type SubscribeInput = {
   productId: string;
@@ -19,14 +21,28 @@ export async function createSubscription(input: SubscribeInput) {
   if (!input.consent) {
     throw new Error('Consent is required');
   }
-  if (!input.email || !input.productId) {
+  const email = String(input.email || '').trim().toLowerCase();
+  const productId = String(input.productId || '').trim();
+  if (!email || !productId) {
     throw new Error('Email and productId are required');
+  }
+  if (!isValidEmail(email)) {
+    throw new Error('Invalid email address');
+  }
+  if (input.phone && !isValidE164Phone(input.phone)) {
+    throw new Error('Phone must be E.164 format (e.g. +15551234567)');
+  }
+  if (input.watchedPrice != null) {
+    const price = Number(input.watchedPrice);
+    if (!Number.isFinite(price) || price < 0) {
+      throw new Error('watchedPrice must be a non-negative number');
+    }
   }
 
   const query = auth.elevate(items.query);
   const existing = await query(COLLECTIONS.subscriptions)
-    .eq('email', input.email.toLowerCase())
-    .eq('productId', input.productId)
+    .eq('email', email)
+    .eq('productId', productId)
     .eq('subscriptionType', input.subscriptionType)
     .eq('state', 'waiting')
     .limit(1)
@@ -38,14 +54,14 @@ export async function createSubscription(input: SubscribeInput) {
 
   const insert = auth.elevate(items.insert);
   return insert(COLLECTIONS.subscriptions, {
-    title: `${input.subscriptionType}:${input.email}`,
-    productId: input.productId,
+    title: `${input.subscriptionType}:${email}`,
+    productId,
     variantId: input.variantId || '',
     productName: input.productName || '',
     productUrl: input.productUrl || '',
     productImage: input.productImage || '',
     subscriptionType: input.subscriptionType,
-    email: input.email.toLowerCase(),
+    email,
     phone: input.phone || '',
     state: 'waiting' as SubscriptionState,
     consent: true,
@@ -57,13 +73,48 @@ export async function createSubscription(input: SubscribeInput) {
 
 export async function findWaitingByProduct(productId: string, subscriptionType: SubscriptionType) {
   const query = auth.elevate(items.query);
-  const result = await query(COLLECTIONS.subscriptions)
-    .eq('productId', productId)
-    .eq('subscriptionType', subscriptionType)
-    .eq('state', 'waiting')
-    .limit(200)
-    .find();
-  return result.items;
+  return queryAllPages(
+    (limit, skip) =>
+      query(COLLECTIONS.subscriptions)
+        .eq('productId', productId)
+        .eq('subscriptionType', subscriptionType)
+        .eq('state', 'waiting')
+        .fields(
+          '_id',
+          'email',
+          'phone',
+          'productId',
+          'productName',
+          'productUrl',
+          'productImage',
+          'subscriptionType',
+          'state',
+        )
+        .skip(skip)
+        .limit(limit)
+        .find(),
+    100,
+  );
+}
+
+export async function cancelWaitingByProduct(productId: string) {
+  const query = auth.elevate(items.query);
+  const update = auth.elevate(items.update);
+  const subs = await queryAllPages(
+    (limit, skip) =>
+      query(COLLECTIONS.subscriptions)
+        .eq('productId', productId)
+        .eq('state', 'waiting')
+        .fields('_id', 'state', 'productId')
+        .skip(skip)
+        .limit(limit)
+        .find(),
+    100,
+  );
+  for (const s of subs) {
+    await update(COLLECTIONS.subscriptions, { ...s, state: 'cancelled' });
+  }
+  return subs.length;
 }
 
 export async function markNotified(id: string, cooldownUntil?: Date) {
@@ -82,19 +133,23 @@ export async function markNotified(id: string, cooldownUntil?: Date) {
 export async function rearmPriceDropWatches() {
   const now = new Date();
   const query = auth.elevate(items.query);
-  const result = await query(COLLECTIONS.subscriptions)
-    .eq('subscriptionType', 'price_drop')
-    .eq('state', 'notified')
-    .limit(200)
-    .find();
   const update = auth.elevate(items.update);
+  const due = await queryAllPages(
+    (limit, skip) =>
+      query(COLLECTIONS.subscriptions)
+        .eq('subscriptionType', 'price_drop')
+        .eq('state', 'notified')
+        .le('cooldownUntil', now)
+        .fields('_id', 'state', 'cooldownUntil', 'subscriptionType')
+        .skip(skip)
+        .limit(limit)
+        .find(),
+    100,
+  );
   let count = 0;
-  for (const item of result.items) {
-    const until = item.cooldownUntil ? new Date(item.cooldownUntil) : null;
-    if (until && until <= now) {
-      await update(COLLECTIONS.subscriptions, { ...item, state: 'waiting', cooldownUntil: null });
-      count += 1;
-    }
+  for (const item of due) {
+    await update(COLLECTIONS.subscriptions, { ...item, state: 'waiting', cooldownUntil: null });
+    count += 1;
   }
   return count;
 }

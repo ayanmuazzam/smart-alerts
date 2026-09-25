@@ -760,7 +760,7 @@ export function InventoryTrackerWorkspace({
                               <Box style={{ width: '110px' }}>
                                 <NumberInput
                                   size="small"
-                                  min={0}
+                                  min={1}
                                   max={500}
                                   value={Number(draft.lowStockThreshold) || 5}
                                   suffix={<Input.Affix>units</Input.Affix>}

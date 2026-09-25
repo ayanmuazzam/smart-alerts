@@ -109,7 +109,6 @@ function formFromSavedOrDefaults(triggerType: string, existing?: any): TemplateF
 export default function SmartAlertsPage() {
   const [primary, setPrimary] = useState<PrimaryTab>('dashboard');
   const [automationSub, setAutomationSub] = useState<AutomationSub>('rules');
-  const [customizationSub, setCustomizationSub] = useState<CustomizationSub>('email');
   const [settingsSub, setSettingsSub] = useState<SettingsSub>('general');
 
   const [loading, setLoading] = useState(true);
@@ -120,6 +119,9 @@ export default function SmartAlertsPage() {
   const [listType, setListType] = useState('back_in_stock');
   const [listSearch, setListSearch] = useState('');
   const [listItems, setListItems] = useState<any[]>([]);
+  const [listTotalCount, setListTotalCount] = useState(0);
+  const [listSkip, setListSkip] = useState(0);
+  const [listStateFilter, setListStateFilter] = useState('');
   const [selectedSubs, setSelectedSubs] = useState<string[]>([]);
   const [whatsapp, setWhatsapp] = useState<any[]>([]);
   const [templates, setTemplates] = useState<any[]>([]);
@@ -130,6 +132,8 @@ export default function SmartAlertsPage() {
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [alertsTotalCount, setAlertsTotalCount] = useState(0);
+  const [alertsSkip, setAlertsSkip] = useState(0);
   const [quota, setQuota] = useState<any>(null);
   const [selectedAlerts, setSelectedAlerts] = useState<string[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -137,6 +141,7 @@ export default function SmartAlertsPage() {
     Record<string, { lowStockThreshold: string; restockAt: string }>
   >({});
   const [rulesModule, setRulesModule] = useState<string | null>(null);
+  const [isSavingRules, setIsSavingRules] = useState(false);
   const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const removeToast = (id: string) => {
@@ -179,15 +184,22 @@ export default function SmartAlertsPage() {
   const listSearchRef = useRef(listSearch);
   listSearchRef.current = listSearch;
 
-  const loadLists = useCallback(async (qOverride?: string) => {
+  const loadLists = useCallback(async (qOverride?: string, skipOverride?: number, stateOverride?: string) => {
     const q = qOverride !== undefined ? qOverride : listSearchRef.current;
-    const extra = `&type=${listType}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+    const skip = skipOverride !== undefined ? skipOverride : listSkip;
+    const state = stateOverride !== undefined ? stateOverride : listStateFilter;
+    const extra =
+      `&type=${listType}&limit=50&skip=${skip}` +
+      (q ? `&q=${encodeURIComponent(q)}` : '') +
+      (state ? `&state=${encodeURIComponent(state)}` : '');
     const data = await adminGet('lists', extra);
     setListItems(data.items || []);
-  }, [listType]);
+    setListTotalCount(data.totalCount ?? (data.items || []).length);
+    setListSkip(data.skip ?? skip);
+  }, [listType, listSkip, listStateFilter]);
 
   const loadWhatsapp = useCallback(async () => {
-    const data = await adminGet('whatsapp');
+    const data = await adminGet('whatsapp', '&limit=50&skip=0');
     setWhatsapp(data.items || []);
     if (data.whatsappSetup) {
       setConfig((c: any) => ({ ...(c || {}), whatsappSetup: data.whatsappSetup }));
@@ -220,7 +232,7 @@ export default function SmartAlertsPage() {
     const term = q !== undefined ? q : search;
     const data = await adminGet(
       'products',
-      term ? `&q=${encodeURIComponent(term)}` : '',
+      `&limit=50&skip=0${term ? `&q=${encodeURIComponent(term)}` : ''}`,
     );
     setTracked(data.tracked || []);
     setSearchResults(data.search || []);
@@ -234,11 +246,14 @@ export default function SmartAlertsPage() {
     setDraftOverrides(drafts);
   }, [search]);
 
-  const loadAlerts = useCallback(async () => {
-    const data = await adminGet('alerts');
+  const loadAlerts = useCallback(async (skipOverride?: number) => {
+    const skip = skipOverride !== undefined ? skipOverride : alertsSkip;
+    const data = await adminGet('alerts', `&limit=50&skip=${skip}`);
     setAlerts(data.items || []);
+    setAlertsTotalCount(data.totalCount ?? (data.items || []).length);
+    setAlertsSkip(data.skip ?? skip);
     setQuota(data.quota);
-  }, []);
+  }, [alertsSkip]);
 
   const loadCurrent = useCallback(async () => {
     setLoading(true);
@@ -268,7 +283,6 @@ export default function SmartAlertsPage() {
   }, [
     primary,
     automationSub,
-    customizationSub,
     listType,
     loadDashboard,
     loadConfig,
@@ -302,12 +316,13 @@ export default function SmartAlertsPage() {
     if (primary !== 'automation' || automationSub !== 'lists') return;
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
     searchDebounce.current = setTimeout(() => {
-      loadLists(listSearch).catch(() => undefined);
+      setListSkip(0);
+      loadLists(listSearch, 0).catch(() => undefined);
     }, 300);
     return () => {
       if (searchDebounce.current) clearTimeout(searchDebounce.current);
     };
-  }, [listSearch, primary, automationSub, loadLists]);
+  }, [listSearch, listType, primary, automationSub, loadLists]);
 
   const saveModules = async (key: string, value: boolean) => {
     const next = {
@@ -321,21 +336,26 @@ export default function SmartAlertsPage() {
   };
 
   const saveRulesFromPanel = async () => {
-    await runSafe(async () => {
-      const data = await adminPost({
-        action: 'saveConfig',
-        patch: {
-          triggerRules: config.triggerRules,
-          notificationLimits: config.notificationLimits,
-          appearance: config.appearance,
-          priceDropCooldownHours: config.priceDropCooldownHours,
-          digestFrequency: config.digestFrequency,
-          globalLowStockThreshold: config.globalLowStockThreshold,
-        },
-      });
-      if (data.config) setConfig(data.config);
-      setRulesModule(null);
-    }, 'Module rules saved');
+    setIsSavingRules(true);
+    try {
+      await runSafe(async () => {
+        const data = await adminPost({
+          action: 'saveConfig',
+          patch: {
+            triggerRules: config.triggerRules,
+            notificationLimits: config.notificationLimits,
+            appearance: config.appearance,
+            priceDropCooldownHours: config.priceDropCooldownHours,
+            digestFrequency: config.digestFrequency,
+            globalLowStockThreshold: config.globalLowStockThreshold,
+          },
+        });
+        if (data.config) setConfig(data.config);
+        setRulesModule(null);
+      }, 'Module rules saved');
+    } finally {
+      setIsSavingRules(false);
+    }
   };
 
   let content: React.ReactNode = null;
@@ -390,6 +410,20 @@ export default function SmartAlertsPage() {
         listSearch={listSearch}
         setListSearch={setListSearch}
         listItems={listItems}
+        listTotalCount={listTotalCount}
+        listSkip={listSkip}
+        listStateFilter={listStateFilter}
+        setListStateFilter={(state: string) => {
+          setListStateFilter(state);
+          setListSkip(0);
+          loadLists(undefined, 0, state).catch(() => undefined);
+        }}
+        onLoadMoreLists={() => {
+          const next = listSkip + 50;
+          if (next < listTotalCount) {
+            loadLists(undefined, next).catch(() => undefined);
+          }
+        }}
         selectedSubs={selectedSubs}
         setSelectedSubs={setSelectedSubs}
         whatsapp={whatsapp}
@@ -400,6 +434,14 @@ export default function SmartAlertsPage() {
         draftOverrides={draftOverrides}
         setDraftOverrides={setDraftOverrides}
         alerts={alerts}
+        alertsTotalCount={alertsTotalCount}
+        alertsSkip={alertsSkip}
+        onLoadMoreAlerts={() => {
+          const next = alertsSkip + 50;
+          if (next < alertsTotalCount) {
+            loadAlerts(next).catch(() => undefined);
+          }
+        }}
         quota={quota}
         selectedAlerts={selectedAlerts}
         setSelectedAlerts={setSelectedAlerts}
@@ -407,6 +449,7 @@ export default function SmartAlertsPage() {
         setRulesModule={setRulesModule}
         onSaveModules={saveModules}
         onSaveRules={saveRulesFromPanel}
+        isSavingRules={isSavingRules}
         onReload={loadCurrent}
         onRun={runSafe}
         onGoSettings={() => {

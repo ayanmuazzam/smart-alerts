@@ -1,20 +1,17 @@
 import type { APIRoute } from 'astro';
 import { items } from '@wix/data';
 import { auth } from '@wix/essentials';
+import { requireDashboardAuth } from '../../lib/smart-alerts/auth-guard';
 import { getOrCreateConfig, updateConfig } from '../../lib/smart-alerts/config';
 import { canSendAlert, countAlertsUsed } from '../../lib/smart-alerts/email';
-import {
-  getCatalogVersion,
-  loadOutOfStockProducts,
-  searchProducts,
-  upsertProductOverride,
-} from '../../lib/smart-alerts/products';
+import { getCatalogVersion, searchProducts, upsertProductOverride } from '../../lib/smart-alerts/products';
 import {
   manualTriggerAlert,
   resyncCatalogCache,
   sendTestAlert,
 } from '../../lib/smart-alerts/engine';
 import { markWhatsappSent, testWhatsappConnection } from '../../lib/smart-alerts/whatsapp';
+import { queryAllPages } from '../../lib/smart-alerts/query-helpers';
 import {
   COLLECTIONS,
   DEFAULT_MODULES,
@@ -35,12 +32,70 @@ function csvEscape(value: unknown): string {
   return s;
 }
 
+function pageParams(url: URL, defaultLimit = 50) {
+  const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || defaultLimit) || defaultLimit, 1), 100);
+  const skip = Math.max(Number(url.searchParams.get('skip') || 0) || 0, 0);
+  return { limit, skip };
+}
+
+const LIST_FIELDS = [
+  '_id',
+  'email',
+  'phone',
+  'productId',
+  'productName',
+  'subscriptionType',
+  'state',
+  'watchedPrice',
+  '_createdDate',
+  'lastNotifiedAt',
+] as const;
+
+const ALERT_FIELDS = [
+  '_id',
+  'alertType',
+  'channel',
+  'to',
+  'status',
+  'productId',
+  'errorMessage',
+  'sentAt',
+] as const;
+
+const WA_FIELDS = [
+  '_id',
+  'phone',
+  'productId',
+  'productName',
+  'email',
+  'message',
+  'waMeUrl',
+  'status',
+] as const;
+
+const TRACKED_FIELDS = [
+  '_id',
+  'productId',
+  'variantId',
+  'productName',
+  'sku',
+  'lowStockThreshold',
+  'useGlobalThreshold',
+  'restockAt',
+  'lastKnownPrice',
+  'lastStockStatus',
+  'tracked',
+] as const;
+
 export const GET: APIRoute = async ({ request }) => {
+  const denied = requireDashboardAuth(request);
+  if (denied) return denied;
+
   const url = new URL(request.url);
   const view = url.searchParams.get('view') || 'dashboard';
 
   try {
-    if (view === 'start' || view === 'dashboard') {
+    if (view === 'dashboard') {
       const config = await getOrCreateConfig();
       const quota = await canSendAlert(config);
       const query = auth.elevate(items.query);
@@ -92,30 +147,52 @@ export const GET: APIRoute = async ({ request }) => {
 
     if (view === 'lists') {
       const type = url.searchParams.get('type') || 'back_in_stock';
-      const q = (url.searchParams.get('q') || '').toLowerCase();
+      const q = (url.searchParams.get('q') || '').trim();
+      const state = url.searchParams.get('state') || '';
+      const { limit, skip } = pageParams(url, 50);
       const query = auth.elevate(items.query);
-      const result = await query(COLLECTIONS.subscriptions)
+      let builder = query(COLLECTIONS.subscriptions)
         .eq('subscriptionType', type)
-        .ne('state', 'cancelled')
-        .limit(100)
-        .find();
-      let itemsOut = result.items;
-      if (q) {
-        itemsOut = itemsOut.filter(
-          (row: any) =>
-            String(row.email || '').toLowerCase().includes(q) ||
-            String(row.productName || '').toLowerCase().includes(q) ||
-            String(row.productId || '').toLowerCase().includes(q),
-        );
+        .fields(...LIST_FIELDS);
+      if (state === 'waiting' || state === 'notified') {
+        builder = builder.eq('state', state);
+      } else {
+        builder = builder.ne('state', 'cancelled');
       }
-      return Response.json({ items: itemsOut });
+      if (q) {
+        builder = builder.contains('email', q);
+      }
+      const result = await builder.skip(skip).limit(limit).find({ returnTotalCount: true });
+      const totalCount = result.totalCount ?? result.items.length;
+      const nextSkip = skip + result.items.length < totalCount ? skip + result.items.length : null;
+      return Response.json({
+        items: result.items,
+        totalCount,
+        skip,
+        limit,
+        nextSkip,
+      });
     }
 
     if (view === 'whatsapp') {
+      const { limit, skip } = pageParams(url, 50);
+      const q = (url.searchParams.get('q') || '').trim();
       const query = auth.elevate(items.query);
-      const result = await query(COLLECTIONS.whatsappQueue).eq('status', 'pending').limit(100).find();
+      let builder = query(COLLECTIONS.whatsappQueue)
+        .eq('status', 'pending')
+        .fields(...WA_FIELDS);
+      if (q) builder = builder.contains('phone', q);
+      const result = await builder.skip(skip).limit(limit).find({ returnTotalCount: true });
       const config = await getOrCreateConfig();
-      return Response.json({ items: result.items, whatsappSetup: config.whatsappSetup });
+      const totalCount = result.totalCount ?? result.items.length;
+      return Response.json({
+        items: result.items,
+        whatsappSetup: config.whatsappSetup,
+        totalCount,
+        skip,
+        limit,
+        nextSkip: skip + result.items.length < totalCount ? skip + result.items.length : null,
+      });
     }
 
     if (view === 'templates') {
@@ -127,41 +204,48 @@ export const GET: APIRoute = async ({ request }) => {
 
     if (view === 'products') {
       const q = url.searchParams.get('q') || '';
+      const { limit, skip } = pageParams(url, 50);
       const query = auth.elevate(items.query);
-      const tracked = await query(COLLECTIONS.productOverrides).eq('tracked', true).limit(100).find();
+      const tracked = await query(COLLECTIONS.productOverrides)
+        .eq('tracked', true)
+        .fields(...TRACKED_FIELDS)
+        .skip(skip)
+        .limit(limit)
+        .find({ returnTotalCount: true });
       const search = q ? await searchProducts(q) : [];
+      const totalCount = tracked.totalCount ?? tracked.items.length;
       return Response.json({
         tracked: tracked.items,
         search,
         catalogVersion: await getCatalogVersion(),
+        totalCount,
+        skip,
+        limit,
+        nextSkip: skip + tracked.items.length < totalCount ? skip + tracked.items.length : null,
       });
     }
 
     if (view === 'alerts') {
       const config = await getOrCreateConfig();
       const quota = await canSendAlert(config);
+      const { limit, skip } = pageParams(url, 50);
+      const status = url.searchParams.get('status') || '';
+      const channel = url.searchParams.get('channel') || '';
+      const q = (url.searchParams.get('q') || '').trim();
       const query = auth.elevate(items.query);
-      const result = await query(COLLECTIONS.alerts).descending('sentAt').limit(100).find();
-      return Response.json({ items: result.items, quota });
-    }
-
-    if (view === 'automation') {
-      const config = await getOrCreateConfig();
-      const query = auth.elevate(items.query);
-      const [lists, wa, tracked, alerts] = await Promise.all([
-        query(COLLECTIONS.subscriptions).ne('state', 'cancelled').limit(100).find(),
-        query(COLLECTIONS.whatsappQueue).eq('status', 'pending').limit(100).find(),
-        query(COLLECTIONS.productOverrides).eq('tracked', true).limit(100).find(),
-        query(COLLECTIONS.alerts).descending('sentAt').limit(100).find(),
-      ]);
-      const quota = await canSendAlert(config);
+      let builder = query(COLLECTIONS.alerts).fields(...ALERT_FIELDS).descending('sentAt');
+      if (status) builder = builder.eq('status', status);
+      if (channel) builder = builder.eq('channel', channel);
+      if (q) builder = builder.contains('to', q);
+      const result = await builder.skip(skip).limit(limit).find({ returnTotalCount: true });
+      const totalCount = result.totalCount ?? result.items.length;
       return Response.json({
-        config,
-        lists: lists.items,
-        whatsapp: wa.items,
-        tracked: tracked.items,
-        alerts: alerts.items,
+        items: result.items,
         quota,
+        totalCount,
+        skip,
+        limit,
+        nextSkip: skip + result.items.length < totalCount ? skip + result.items.length : null,
       });
     }
 
@@ -175,6 +259,9 @@ export const GET: APIRoute = async ({ request }) => {
 };
 
 export const POST: APIRoute = async ({ request }) => {
+  const denied = requireDashboardAuth(request);
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const action = body.action as string;
@@ -225,15 +312,8 @@ export const POST: APIRoute = async ({ request }) => {
     }
 
     if (action === 'loadOos') {
-      const products = await loadOutOfStockProducts(50);
-      for (const p of products) {
-        await upsertProductOverride({
-          productId: String(p._id),
-          productName: (p as { name?: string }).name,
-          lastStockStatus: 'OUT_OF_STOCK',
-        });
-      }
-      return Response.json({ ok: true, count: products.length });
+      const count = await resyncCatalogCache(50);
+      return Response.json({ ok: true, count });
     }
 
     if (action === 'saveOverride') {
@@ -246,8 +326,12 @@ export const POST: APIRoute = async ({ request }) => {
       const ids: string[] = body.ids || [];
       if (body.all) {
         const query = auth.elevate(items.query);
-        const all = await query(COLLECTIONS.alerts).limit(1000).find();
-        for (const item of all.items) {
+        const all = await queryAllPages(
+          (limit, skip) =>
+            query(COLLECTIONS.alerts).fields('_id').skip(skip).limit(limit).find(),
+          100,
+        );
+        for (const item of all) {
           await remove(COLLECTIONS.alerts, String(item._id));
         }
       } else {
@@ -321,19 +405,23 @@ export const POST: APIRoute = async ({ request }) => {
     if (action === 'exportSubscribersCsv') {
       const type = body.type || 'back_in_stock';
       const query = auth.elevate(items.query);
-      const result = await query(COLLECTIONS.subscriptions)
-        .eq('subscriptionType', type)
-        .ne('state', 'cancelled')
-        .limit(500)
-        .find();
+      const rows = await queryAllPages(
+        (limit, skip) =>
+          query(COLLECTIONS.subscriptions)
+            .eq('subscriptionType', type)
+            .ne('state', 'cancelled')
+            .fields('email', 'productId', 'productName', 'state', 'subscriptionType', 'phone')
+            .skip(skip)
+            .limit(limit)
+            .find(),
+        100,
+      );
       const header = ['email', 'productId', 'productName', 'state', 'subscriptionType', 'phone'];
       const lines = [
         header.join(','),
-        ...result.items.map((row: any) =>
-          header.map((h) => csvEscape(row[h])).join(','),
-        ),
+        ...rows.map((row: any) => header.map((h) => csvEscape(row[h])).join(',')),
       ];
-      return Response.json({ csv: lines.join('\n'), count: result.items.length });
+      return Response.json({ csv: lines.join('\n'), count: rows.length });
     }
 
     return Response.json({ error: 'Unknown action' }, { status: 400 });

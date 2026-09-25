@@ -23,6 +23,7 @@ import {
   Email,
 } from '@wix/wix-ui-icons-common';
 import { EmptyOnboarding } from '../components/EmptyOnboarding';
+import { MonoIconBadge, type MonoIconTone } from '../components/MonoIconBadge';
 import type { AutomationSub, CustomizationSub } from '../adminApi';
 
 type Props = {
@@ -38,8 +39,7 @@ const FONT_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-s
 
 function getActivityMeta(kind: string): {
   icon: React.ReactNode;
-  bg: string;
-  color: string;
+  tone: MonoIconTone;
   badgeSkin: 'success' | 'standard' | 'warning' | 'neutral';
   label: string;
 } {
@@ -47,8 +47,7 @@ function getActivityMeta(kind: string): {
   if (k.includes('alert') || k.includes('sent') || k.includes('dispatched')) {
     return {
       icon: <Check size="14" />,
-      bg: '#ECFDF5',
-      color: '#059669',
+      tone: 'emerald',
       badgeSkin: 'success',
       label: 'Alert Sent',
     };
@@ -56,8 +55,7 @@ function getActivityMeta(kind: string): {
   if (k.includes('sub') || k.includes('user') || k.includes('signup')) {
     return {
       icon: <UserChecked size="14" />,
-      bg: '#EFF6FF',
-      color: '#1D4ED8',
+      tone: 'blue',
       badgeSkin: 'standard',
       label: 'Subscriber',
     };
@@ -65,16 +63,14 @@ function getActivityMeta(kind: string): {
   if (k.includes('price')) {
     return {
       icon: <Tag size="14" />,
-      bg: '#F5F3FF',
-      color: '#7C3AED',
+      tone: 'violet',
       badgeSkin: 'standard',
       label: 'Price Watch',
     };
   }
   return {
     icon: <Package size="14" />,
-    bg: '#FFFBEB',
-    color: '#D97706',
+    tone: 'amber',
     badgeSkin: 'warning',
     label: kind || 'Activity',
   };
@@ -123,22 +119,9 @@ export function DashboardScreen({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            style={{
-              width: '42px',
-              height: '42px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(59, 130, 246, 0.28)',
-              flexShrink: 0,
-            }}
-          >
+          <MonoIconBadge tone="blue" size={42}>
             <Sparkles size="20" />
-          </div>
+          </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontSize: '16px', fontWeight: 700, color: '#0F172A' }}>
@@ -278,22 +261,9 @@ export function DashboardScreen({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div
-              style={{
-                width: '44px',
-                height: '44px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 10px rgba(59, 130, 246, 0.25)',
-                flexShrink: 0,
-              }}
-            >
+            <MonoIconBadge tone="blue" size={44}>
               <User size="20" />
-            </div>
+            </MonoIconBadge>
             <span
               style={{
                 fontSize: '11.5px',
@@ -375,22 +345,9 @@ export function DashboardScreen({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div
-              style={{
-                width: '44px',
-                height: '44px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 10px rgba(16, 185, 129, 0.25)',
-                flexShrink: 0,
-              }}
-            >
+            <MonoIconBadge tone="emerald" size={44}>
               <Check size="20" />
-            </div>
+            </MonoIconBadge>
             <span
               style={{
                 fontSize: '11.5px',
@@ -447,22 +404,9 @@ export function DashboardScreen({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div
-              style={{
-                width: '44px',
-                height: '44px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 10px rgba(245, 158, 11, 0.25)',
-                flexShrink: 0,
-              }}
-            >
+            <MonoIconBadge tone="amber" size={44}>
               <DateAndTime size="20" />
-            </div>
+            </MonoIconBadge>
             <span
               style={{
                 fontSize: '11.5px',
@@ -519,22 +463,9 @@ export function DashboardScreen({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div
-              style={{
-                width: '44px',
-                height: '44px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%)',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 10px rgba(139, 92, 246, 0.25)',
-                flexShrink: 0,
-              }}
-            >
+            <MonoIconBadge tone="violet" size={44}>
               <Sparkles size="20" />
-            </div>
+            </MonoIconBadge>
             <span
               style={{
                 fontSize: '11.5px',
@@ -607,22 +538,9 @@ export function DashboardScreen({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <div
-              style={{
-                width: '42px',
-                height: '42px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 10px rgba(245, 158, 11, 0.3)',
-                flexShrink: 0,
-              }}
-            >
+            <MonoIconBadge tone="amber" size={42}>
               <Package size="20" />
-            </div>
+            </MonoIconBadge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
               <span style={{ fontSize: '15px', fontWeight: 700, color: '#92400E' }}>
                 {onHoldStock} Customer{onHoldStock > 1 ? 's' : ''} Waiting for Restocked Inventory
@@ -714,21 +632,9 @@ export function DashboardScreen({
                         const meta = getActivityMeta(row.kind);
                         return (
                           <Box verticalAlign="middle" gap="SP2">
-                            <div
-                              style={{
-                                width: '28px',
-                                height: '28px',
-                                borderRadius: '6px',
-                                backgroundColor: meta.bg,
-                                color: meta.color,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                              }}
-                            >
+                            <MonoIconBadge tone={meta.tone} size={28} radius={6}>
                               {meta.icon}
-                            </div>
+                            </MonoIconBadge>
                             <span
                               style={{
                                 fontSize: '13px',

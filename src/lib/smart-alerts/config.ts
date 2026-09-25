@@ -15,6 +15,13 @@ import {
   PRICE_DROP_COOLDOWN_HOURS,
   type ModuleKey,
 } from './constants';
+import {
+  clampNonNegative,
+  clampPositiveInt,
+  isValidEmail,
+  sanitizeColorMap,
+  safeUrl,
+} from './sanitize';
 
 export type SiteConfig = {
   _id: string;
@@ -46,15 +53,168 @@ const elevate = {
   remove: () => auth.elevate(items.remove),
 };
 
-export function elevatedData() {
-  return elevate;
+const MODULE_KEYS = Object.keys(DEFAULT_MODULES) as ModuleKey[];
+
+function sanitizePatch(patch: Partial<SiteConfig>): Partial<SiteConfig> {
+  const out: Partial<SiteConfig> = { ...patch };
+
+  if (patch.sellerEmail != null) {
+    const email = String(patch.sellerEmail).trim();
+    if (email && !isValidEmail(email)) {
+      throw new Error('Invalid sellerEmail');
+    }
+    out.sellerEmail = email;
+  }
+
+  if (patch.support) {
+    const supportEmail = String(patch.support.supportEmail || '').trim();
+    if (supportEmail && !isValidEmail(supportEmail)) {
+      throw new Error('Invalid supportEmail');
+    }
+    out.support = {
+      ...DEFAULT_SUPPORT,
+      ...patch.support,
+      supportEmail,
+      supportWhatsapp: String(patch.support.supportWhatsapp || '').trim(),
+    };
+  }
+
+  if (patch.monthlyAlertQuota != null) {
+    out.monthlyAlertQuota = clampPositiveInt(patch.monthlyAlertQuota, DEFAULT_QUOTA, 1_000_000);
+  }
+  if (patch.priceDropCooldownHours != null) {
+    out.priceDropCooldownHours = clampPositiveInt(
+      patch.priceDropCooldownHours,
+      PRICE_DROP_COOLDOWN_HOURS,
+      8760,
+    );
+  }
+  if (patch.globalLowStockThreshold != null) {
+    out.globalLowStockThreshold = clampPositiveInt(patch.globalLowStockThreshold, 5, 100000);
+  }
+  if (patch.digestFrequency != null) {
+    const f = String(patch.digestFrequency);
+    if (!['daily', 'weekly', 'off'].includes(f)) {
+      throw new Error('Invalid digestFrequency');
+    }
+    out.digestFrequency = f as SiteConfig['digestFrequency'];
+  }
+
+  if (patch.modules) {
+    const modules = { ...DEFAULT_MODULES };
+    for (const key of MODULE_KEYS) {
+      if (key in patch.modules) modules[key] = Boolean(patch.modules[key]);
+    }
+    out.modules = modules;
+  }
+
+  if (patch.appearance) {
+    const colors = sanitizeColorMap(
+      patch.appearance.colors as Record<string, unknown> | undefined,
+      DEFAULT_APPEARANCE.colors,
+    );
+    out.appearance = {
+      ...DEFAULT_APPEARANCE,
+      ...patch.appearance,
+      colors: colors as typeof DEFAULT_APPEARANCE.colors,
+      stockThreshold: clampPositiveInt(
+        (patch.appearance as any).stockThreshold ?? DEFAULT_APPEARANCE.stockThreshold,
+        DEFAULT_APPEARANCE.stockThreshold,
+        100000,
+      ),
+    };
+  }
+
+  if (patch.brand) {
+    out.brand = {
+      ...DEFAULT_BRAND,
+      ...patch.brand,
+      primaryColor: sanitizeColorMap(
+        { primaryColor: patch.brand.primaryColor },
+        { primaryColor: DEFAULT_BRAND.primaryColor },
+      ).primaryColor,
+      secondaryColor: sanitizeColorMap(
+        { secondaryColor: patch.brand.secondaryColor },
+        { secondaryColor: DEFAULT_BRAND.secondaryColor },
+      ).secondaryColor,
+      logoUrl: safeUrl(patch.brand.logoUrl, ''),
+      footerText: String(patch.brand.footerText || ''),
+    };
+  }
+
+  if (patch.notificationLimits) {
+    out.notificationLimits = {
+      maxEmailPerCustomerPerDay: clampPositiveInt(
+        patch.notificationLimits.maxEmailPerCustomerPerDay,
+        DEFAULT_NOTIFICATION_LIMITS.maxEmailPerCustomerPerDay,
+        100,
+      ),
+      maxEmailPerCustomerPerWeek: clampPositiveInt(
+        patch.notificationLimits.maxEmailPerCustomerPerWeek,
+        DEFAULT_NOTIFICATION_LIMITS.maxEmailPerCustomerPerWeek,
+        500,
+      ),
+      maxWhatsappPerCustomerPerDay: clampPositiveInt(
+        patch.notificationLimits.maxWhatsappPerCustomerPerDay,
+        DEFAULT_NOTIFICATION_LIMITS.maxWhatsappPerCustomerPerDay,
+        50,
+      ),
+      batchMode: patch.notificationLimits.batchMode === 'hourly' ? 'hourly' : 'immediate',
+      batchHourUtc: Math.min(
+        23,
+        Math.max(0, Math.floor(Number(patch.notificationLimits.batchHourUtc ?? 9)) || 0),
+      ),
+    };
+  }
+
+  if (patch.triggerRules) {
+    out.triggerRules = {
+      ...DEFAULT_TRIGGER_RULES,
+      ...patch.triggerRules,
+      backInStockMinQty: clampPositiveInt(
+        patch.triggerRules.backInStockMinQty,
+        DEFAULT_TRIGGER_RULES.backInStockMinQty,
+      ),
+      priceDropMinPercent: clampNonNegative(
+        patch.triggerRules.priceDropMinPercent,
+        DEFAULT_TRIGGER_RULES.priceDropMinPercent,
+        100,
+      ),
+      priceDropMinAmount: clampNonNegative(
+        patch.triggerRules.priceDropMinAmount,
+        DEFAULT_TRIGGER_RULES.priceDropMinAmount,
+      ),
+      globalLowStockThreshold: clampPositiveInt(
+        patch.triggerRules.globalLowStockThreshold,
+        DEFAULT_TRIGGER_RULES.globalLowStockThreshold,
+      ),
+      categoryLowStockDefaults: patch.triggerRules.categoryLowStockDefaults || {},
+    };
+  }
+
+  if (patch.whatsappSetup) {
+    const mode = patch.whatsappSetup.mode === 'api' ? 'api' : 'manual';
+    const provider = patch.whatsappSetup.provider === 'twilio' ? 'twilio' : 'none';
+    out.whatsappSetup = {
+      ...DEFAULT_WHATSAPP_SETUP,
+      ...patch.whatsappSetup,
+      mode,
+      provider,
+      senderPhone: String(patch.whatsappSetup.senderPhone || '').trim(),
+    };
+  }
+
+  return out;
 }
 
 function normalizeConfig(raw: Partial<SiteConfig> & { _id?: string }): SiteConfig {
   const appearance = {
     ...DEFAULT_APPEARANCE,
     ...(raw.appearance || {}),
-    colors: { ...DEFAULT_APPEARANCE.colors, ...(raw.appearance?.colors || {}) },
+    colors: sanitizeColorMap(
+      { ...DEFAULT_APPEARANCE.colors, ...(raw.appearance?.colors || {}) } as Record<string, unknown>,
+      DEFAULT_APPEARANCE.colors,
+    ) as typeof DEFAULT_APPEARANCE.colors,
     buttons: {
       notifyMe: {
         ...DEFAULT_APPEARANCE.buttons.notifyMe,
@@ -86,16 +246,34 @@ function normalizeConfig(raw: Partial<SiteConfig> & { _id?: string }): SiteConfi
       raw.globalLowStockThreshold ??
       DEFAULT_TRIGGER_RULES.globalLowStockThreshold,
   };
+  const digest =
+    raw.digestFrequency === 'daily' ||
+    raw.digestFrequency === 'weekly' ||
+    raw.digestFrequency === 'off'
+      ? raw.digestFrequency
+      : 'weekly';
   return {
     _id: raw._id || CONFIG_SINGLETON_ID,
     title: raw.title || 'Smart Alerts Config',
     modules: { ...DEFAULT_MODULES, ...(raw.modules || {}) },
     appearance,
-    brand: { ...DEFAULT_BRAND, ...(raw.brand || {}) },
+    brand: {
+      ...DEFAULT_BRAND,
+      ...(raw.brand || {}),
+      primaryColor: sanitizeColorMap(
+        { c: raw.brand?.primaryColor },
+        { c: DEFAULT_BRAND.primaryColor },
+      ).c,
+      secondaryColor: sanitizeColorMap(
+        { c: raw.brand?.secondaryColor },
+        { c: DEFAULT_BRAND.secondaryColor },
+      ).c,
+      logoUrl: safeUrl(raw.brand?.logoUrl, DEFAULT_BRAND.logoUrl || ''),
+    },
     support: { ...DEFAULT_SUPPORT, ...(raw.support || {}) },
-    monthlyAlertQuota: raw.monthlyAlertQuota ?? DEFAULT_QUOTA,
-    priceDropCooldownHours: raw.priceDropCooldownHours ?? PRICE_DROP_COOLDOWN_HOURS,
-    digestFrequency: raw.digestFrequency || 'weekly',
+    monthlyAlertQuota: clampPositiveInt(raw.monthlyAlertQuota, DEFAULT_QUOTA),
+    priceDropCooldownHours: clampPositiveInt(raw.priceDropCooldownHours, PRICE_DROP_COOLDOWN_HOURS),
+    digestFrequency: digest,
     sellerEmail: raw.sellerEmail || '',
     globalLowStockThreshold: triggerRules.globalLowStockThreshold,
     lastDigestAt: raw.lastDigestAt ?? null,
@@ -127,76 +305,75 @@ export async function getOrCreateConfig(): Promise<SiteConfig> {
     const save = elevate.save();
     await save(COLLECTIONS.config, defaults);
   } catch (err) {
-    // Collections may not be provisioned yet on a fresh install — still return defaults
-    // so admin/start can render instead of hard-failing the whole worker request.
     console.error('Smart Alerts: failed to persist default config', err);
   }
   return defaults;
 }
 
 export async function updateConfig(patch: Partial<SiteConfig>): Promise<SiteConfig> {
+  const safePatch = sanitizePatch(patch);
   const current = await getOrCreateConfig();
   const merged: Partial<SiteConfig> = {
     ...current,
-    ...patch,
+    ...safePatch,
     _id: CONFIG_SINGLETON_ID,
   };
-  if (patch.modules) merged.modules = { ...current.modules, ...patch.modules };
-  if (patch.appearance) {
+  if (safePatch.modules) merged.modules = { ...current.modules, ...safePatch.modules };
+  if (safePatch.appearance) {
     merged.appearance = {
       ...current.appearance,
-      ...patch.appearance,
-      colors: { ...current.appearance.colors, ...(patch.appearance.colors || {}) },
+      ...safePatch.appearance,
+      colors: { ...current.appearance.colors, ...(safePatch.appearance.colors || {}) },
       buttons: {
         notifyMe: {
           ...current.appearance.buttons.notifyMe,
-          ...(patch.appearance as any).buttons?.notifyMe,
+          ...(safePatch.appearance as any).buttons?.notifyMe,
         },
         priceDrop: {
           ...current.appearance.buttons.priceDrop,
-          ...(patch.appearance as any).buttons?.priceDrop,
+          ...(safePatch.appearance as any).buttons?.priceDrop,
         },
         modalSubmit: {
           ...current.appearance.buttons.modalSubmit,
-          ...(patch.appearance as any).buttons?.modalSubmit,
+          ...(safePatch.appearance as any).buttons?.modalSubmit,
         },
       },
       modal: {
         ...current.appearance.modal,
-        ...(patch.appearance as any).modal,
+        ...(safePatch.appearance as any).modal,
       },
     };
   }
-  if (patch.brand) merged.brand = { ...current.brand, ...patch.brand };
-  if (patch.support) merged.support = { ...current.support, ...patch.support };
-  if (patch.notificationLimits) {
-    merged.notificationLimits = { ...current.notificationLimits, ...patch.notificationLimits };
+  if (safePatch.brand) merged.brand = { ...current.brand, ...safePatch.brand };
+  if (safePatch.support) merged.support = { ...current.support, ...safePatch.support };
+  if (safePatch.notificationLimits) {
+    merged.notificationLimits = { ...current.notificationLimits, ...safePatch.notificationLimits };
   }
-  if (patch.triggerRules) {
+  if (safePatch.triggerRules) {
     merged.triggerRules = {
       ...current.triggerRules,
-      ...patch.triggerRules,
+      ...safePatch.triggerRules,
       categoryLowStockDefaults: {
         ...current.triggerRules.categoryLowStockDefaults,
-        ...(patch.triggerRules.categoryLowStockDefaults || {}),
+        ...(safePatch.triggerRules.categoryLowStockDefaults || {}),
       },
     };
-    if (patch.triggerRules.globalLowStockThreshold != null) {
-      merged.globalLowStockThreshold = patch.triggerRules.globalLowStockThreshold;
+    if (safePatch.triggerRules.globalLowStockThreshold != null) {
+      merged.globalLowStockThreshold = safePatch.triggerRules.globalLowStockThreshold;
     }
   }
-  if (patch.globalLowStockThreshold != null) {
-    merged.globalLowStockThreshold = patch.globalLowStockThreshold;
+  if (safePatch.globalLowStockThreshold != null) {
+    merged.globalLowStockThreshold = safePatch.globalLowStockThreshold;
     merged.triggerRules = {
       ...(merged.triggerRules || current.triggerRules),
-      globalLowStockThreshold: patch.globalLowStockThreshold,
+      globalLowStockThreshold: safePatch.globalLowStockThreshold,
     };
   }
-  if (patch.whatsappSetup) {
-    merged.whatsappSetup = { ...current.whatsappSetup, ...patch.whatsappSetup };
+  if (safePatch.whatsappSetup) {
+    merged.whatsappSetup = { ...current.whatsappSetup, ...safePatch.whatsappSetup };
   }
-  if (patch.syncSettings) {
-    merged.syncSettings = { ...current.syncSettings, ...patch.syncSettings };
+  if (safePatch.syncSettings) {
+    merged.syncSettings = { ...current.syncSettings, ...safePatch.syncSettings };
   }
 
   const next = normalizeConfig(merged);
@@ -211,7 +388,11 @@ export function isModuleEnabled(config: SiteConfig, key: ModuleKey): boolean {
 
 export function getLowStockThreshold(
   config: SiteConfig,
-  override?: { useGlobalThreshold?: boolean; lowStockThreshold?: number; categoryId?: string } | null,
+  override?: {
+    useGlobalThreshold?: boolean;
+    lowStockThreshold?: number;
+    categoryId?: string;
+  } | null,
 ): number {
   if (override?.useGlobalThreshold === false && override.lowStockThreshold != null) {
     return Number(override.lowStockThreshold);
@@ -226,7 +407,10 @@ export function getLowStockThreshold(
 }
 
 export async function markEventProcessed(eventId: string, eventType: string): Promise<boolean> {
-  if (!eventId) return false;
+  if (!eventId) {
+    console.warn('Smart Alerts: missing event id; refusing to process');
+    return true;
+  }
   const query = elevate.query();
   const found = await query(COLLECTIONS.processedEvents).eq('eventId', eventId).limit(1).find();
   if (found.items.length > 0) return true;
@@ -241,19 +425,26 @@ export async function markEventProcessed(eventId: string, eventType: string): Pr
   return false;
 }
 
-export async function stampSyncEvent(eventType: string) {
-  // Avoid full config rewrite races on hot event paths — best-effort stamp only.
-  try {
-    const current = await getOrCreateConfig();
-    await updateConfig({
-      syncSettings: {
-        ...current.syncSettings,
-        lastEventAt: new Date().toISOString(),
-        lastEventType: eventType,
-      },
-    });
-  } catch {
-    /* ignore stamp failures */
-  }
-}
+let stampTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingStampType = '';
 
+export async function stampSyncEvent(eventType: string) {
+  pendingStampType = eventType;
+  if (stampTimer) return;
+  stampTimer = setTimeout(async () => {
+    stampTimer = null;
+    const type = pendingStampType;
+    try {
+      const current = await getOrCreateConfig();
+      await updateConfig({
+        syncSettings: {
+          ...current.syncSettings,
+          lastEventAt: new Date().toISOString(),
+          lastEventType: type,
+        },
+      });
+    } catch {
+      /* ignore stamp failures */
+    }
+  }, 2000);
+}

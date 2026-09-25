@@ -17,9 +17,10 @@ Enable in [Permissions](https://manage.wix.com/apps/8a35a26c-308b-4874-9748-db81
 - `SCOPE.STORES.PRODUCT_READ` / `SCOPE.STORES.PRODUCT_READ_ADMIN` (V3)
 - `SCOPE.STORES.INVENTORY_ITEM_READ`
 - `SCOPE.DC-STORES.READ-ORDERS`
+- `SCOPE.DC-PROMOTE.EMAIL-MARKETING` (Manage Email Marketing) — Wix Email Transmissions
 - Site properties / business info read (store name & contact email)
 - Wix Data (collections created by this app)
-- Secrets read (if using Wix Secrets for Resend / cron)
+- Secrets read (if using Wix Secrets for cron / Twilio)
 
 ## 2. Data collections
 
@@ -35,10 +36,18 @@ Set either via Wix Secrets or local `.env`:
 
 | Key | Purpose |
 |---|---|
-| `RESEND_API_KEY` | Transactional email via Resend |
 | `CRON_SECRET` | Shared secret for `POST /api/cron` (`x-cron-secret` header) |
+| `TWILIO_*` | Optional WhatsApp API mode |
 
-Resend from-address defaults to `onboarding@resend.dev` until you verify a domain in Resend.
+**Email** uses native **Wix Email Transmissions** (`TRANSACTIONAL`) — no Resend/API key. Default from-address is Wix shared mail (`no-reply@wixsitemail.com`) unless you verify a sender email in the site.
+
+Enable permission in Dev Center:
+
+- `SCOPE.DC-PROMOTE.EMAIL-MARKETING` (Manage Email Marketing) — required for Email Transmissions
+
+Transactional sends also count against the site’s Wix email quota.
+
+**If Alert History says Sent but the inbox is empty:** Wix accepts sends asynchronously (`ACCEPTED`); that is not proof of inbox delivery. Check Spam/Junk for `no-reply@wixsitemail.com`, confirm Email Marketing is active on the site with remaining quota, and verify a custom sender under Marketing → Email Marketing → Sender emails if you want branded From.
 
 ### Storefront → `/api/*` CORS
 

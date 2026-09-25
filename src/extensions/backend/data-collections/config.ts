@@ -66,9 +66,8 @@ export default {
   displayField: 'title',
   dataPermissions: {
     itemInsert: 'PRIVILEGED',
-    // Storefront PDP reads modules/appearance without an elevated API call
-    // (anonymous /api/* OAuth visitor tokens fail in local/dev).
-    itemRead: 'ANYONE',
+    // Storefront reads via /api/public-config and /api/product-context (elevated).
+    itemRead: 'PRIVILEGED',
     itemRemove: 'PRIVILEGED',
     itemUpdate: 'PRIVILEGED',
   },

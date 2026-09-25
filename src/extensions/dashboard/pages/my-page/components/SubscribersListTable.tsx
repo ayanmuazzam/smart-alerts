@@ -40,6 +40,10 @@ export interface SubscribersListTableProps {
   listSearch: string;
   setListSearch: (s: string) => void;
   listItems: SubscriberItem[];
+  listTotalCount?: number;
+  listStateFilter?: string;
+  setListStateFilter?: (s: string) => void;
+  onLoadMore?: () => void;
   selectedSubs: string[];
   setSelectedSubs: (ids: string[] | ((prev: string[]) => string[])) => void;
   onExportCsv: () => Promise<void>;
@@ -82,6 +86,10 @@ export function SubscribersListTable({
   listSearch,
   setListSearch,
   listItems,
+  listTotalCount,
+  listStateFilter = '',
+  setListStateFilter,
+  onLoadMore,
   selectedSubs,
   setSelectedSubs,
   onExportCsv,
@@ -91,34 +99,21 @@ export function SubscribersListTable({
   onGoCustomization,
 }: SubscribersListTableProps) {
   const [triggeringId, setTriggeringId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'waiting' | 'notified'>('all');
+  const statusFilter: 'all' | 'waiting' | 'notified' =
+    listStateFilter === 'waiting' || listStateFilter === 'notified' ? listStateFilter : 'all';
+  const setStatusFilter = (next: 'all' | 'waiting' | 'notified') => {
+    setListStateFilter?.(next === 'all' ? '' : next);
+  };
 
-  // Filter by search query
-  const searchFiltered = listItems.filter((item) => {
-    if (!listSearch) return true;
-    const term = listSearch.toLowerCase();
-    return (
-      (item.email || '').toLowerCase().includes(term) ||
-      (item.productName || '').toLowerCase().includes(term) ||
-      (item.productId || '').toLowerCase().includes(term)
-    );
-  });
-
-  // Filter by status tab
-  const filteredItems = searchFiltered.filter((item) => {
-    if (statusFilter === 'all') return true;
-    const isNotified = (item.state || '').toLowerCase() === 'notified';
-    if (statusFilter === 'notified') return isNotified;
-    if (statusFilter === 'waiting') return !isNotified;
-    return true;
-  });
-
-  const waitingCount = searchFiltered.filter(
+  // Search/status are applied server-side; render the page as returned.
+  const filteredItems = listItems;
+  const waitingCount = listItems.filter(
     (i) => !i.state || i.state.toLowerCase() === 'waiting',
   ).length;
-  const notifiedCount = searchFiltered.filter(
+  const notifiedCount = listItems.filter(
     (i) => i.state && i.state.toLowerCase() === 'notified',
   ).length;
+  const totalShown = listTotalCount ?? listItems.length;
 
   const isAllSelected =
     filteredItems.length > 0 &&
@@ -246,7 +241,7 @@ export function SubscribersListTable({
           </div>
           <div>
             <div style={{ fontSize: '24px', fontWeight: 700, color: '#0F172A', lineHeight: '1.1' }}>
-              {searchFiltered.length}
+              {totalShown}
             </div>
             <div style={{ fontSize: '12px', color: '#64748B', marginTop: '4px' }}>
               Total Subscribers
@@ -464,7 +459,7 @@ export function SubscribersListTable({
                       boxShadow: statusFilter === 'all' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
                     }}
                   >
-                    All ({searchFiltered.length})
+                    All ({totalShown})
                   </button>
                   <button
                     type="button"
@@ -787,6 +782,13 @@ export function SubscribersListTable({
                 <Table.Content />
               </Table>
             )}
+            {onLoadMore && (listTotalCount ?? 0) > listItems.length ? (
+              <Box marginTop="SP3" align="center">
+                <Button size="small" priority="secondary" onClick={onLoadMore}>
+                  Load more
+                </Button>
+              </Box>
+            ) : null}
           </Box>
         </Card.Content>
       </Card>

@@ -18,6 +18,11 @@ export default {
     itemRemove: 'PRIVILEGED',
     itemUpdate: 'PRIVILEGED',
   },
-  indexes: [],
+  indexes: [
+    {
+      fields: [{ path: 'eventId' }],
+      unique: true,
+    },
+  ],
   initialData: [],
 } satisfies DataCollection;

@@ -16,12 +16,13 @@ import {
   sendTransactionalEmail,
 } from './email';
 import {
+  cancelWaitingByProduct,
   findWaitingByProduct,
   markNotified,
   rearmPriceDropWatches,
 } from './subscriptions';
-import { getOverride, getProductSnapshot, loadOutOfStockProducts, upsertProductOverride } from './products';
-import { COLLECTIONS } from './constants';
+import { getOverride, getProductSnapshot, getFirstProductSnapshot, loadOutOfStockProducts, upsertProductOverride } from './products';
+import { COLLECTIONS, getDefaultEmailTemplate } from './constants';
 import { sendWhatsappViaTwilio } from './whatsapp';
 
 async function storeIdentity(): Promise<{ storeName: string; replyTo: string }> {
@@ -55,9 +56,15 @@ async function enqueuePendingSend(entry: {
   payload: Record<string, unknown>;
 }) {
   const insert = auth.elevate(items.insert);
-  const hour = new Date();
-  hour.setUTCMinutes(0, 0, 0);
-  hour.setUTCHours(hour.getUTCHours() + 1);
+  const config = await getOrCreateConfig();
+  const hourUtc = Math.min(23, Math.max(0, Number(config.notificationLimits?.batchHourUtc ?? 9)));
+  const scheduled = new Date();
+  scheduled.setUTCMinutes(0, 0, 0);
+  scheduled.setUTCSeconds(0, 0);
+  if (scheduled.getUTCHours() >= hourUtc) {
+    scheduled.setUTCDate(scheduled.getUTCDate() + 1);
+  }
+  scheduled.setUTCHours(hourUtc);
   await insert(COLLECTIONS.pendingSends, {
     title: `${entry.alertType} → ${entry.to}`,
     to: entry.to,
@@ -65,7 +72,7 @@ async function enqueuePendingSend(entry: {
     alertType: entry.alertType,
     productId: entry.productId || '',
     payload: entry.payload,
-    scheduledFor: hour,
+    scheduledFor: scheduled,
     status: 'pending',
   });
 }
@@ -81,17 +88,27 @@ async function deliverFromTemplate(opts: {
   skipCustomerLimit?: boolean;
 }) {
   const config = await getOrCreateConfig();
-  const template = (await getTemplate(opts.triggerType)) as Record<string, unknown>;
+  const stored = (await getTemplate(opts.triggerType)) as Record<string, unknown>;
+  const defaults = getDefaultEmailTemplate(opts.triggerType);
+  // CMS templates may have blank subject/body — fill from defaults so Wix never gets empty subject.
+  const template = {
+    ...defaults,
+    ...Object.fromEntries(
+      Object.entries(stored).filter(([, v]) => v !== '' && v != null),
+    ),
+  };
   const identity = await storeIdentity();
   const tokens = {
     store_name: identity.storeName,
     customer_name: 'there',
     ...opts.tokens,
   };
-  const subject = renderTokens(String(template.subject || ''), tokens);
-  const headline = renderTokens(String(template.headline || ''), tokens);
-  const body = renderTokens(String(template.body || ''), tokens);
-  const preheader = renderTokens(String(template.preheader || ''), tokens);
+  const subject =
+    renderTokens(String(template.subject || defaults.subject), tokens).trim() ||
+    renderTokens(defaults.subject, tokens);
+  const headline = renderTokens(String(template.headline || defaults.headline || ''), tokens);
+  const body = renderTokens(String(template.body || defaults.body || ''), tokens);
+  const preheader = renderTokens(String(template.preheader || defaults.preheader || ''), tokens);
   const footer = renderTokens(config.brand.footerText || '', tokens);
   const html = buildEmailHtml({
     layout: String(template.layout || 'Centered'),
@@ -106,7 +123,7 @@ async function deliverFromTemplate(opts: {
     productName: renderTokens(String(opts.tokens.product_name || 'Featured Item'), tokens),
     productPrice: renderTokens(String(opts.tokens.product_price || '$140.00'), tokens),
     productImage: opts.productImage,
-    showProductImage: Boolean(template.showProductImage),
+    showProductImage: Boolean(template.showProductImage) || Boolean(opts.productImage),
     reviewQuote: renderTokens(String(template.reviewQuote || ''), tokens),
     showFeatures: Boolean(template.showFeatures),
     featuresTitle: renderTokens(String(template.featuresTitle || "Why you'll love it:"), tokens),
@@ -114,15 +131,17 @@ async function deliverFromTemplate(opts: {
     closingText: renderTokens(String(template.closingText || ''), tokens),
     signoffText: renderTokens(String(template.signoffText || 'The {store_name} Team'), tokens),
     brandColor: config.brand.primaryColor,
+    secondaryColor: config.brand.secondaryColor,
     logoUrl: config.brand.logoUrl,
     footerText: footer || renderTokens(String(template.footerDisclaimer || ''), tokens),
+    supportWhatsapp: config.support?.supportWhatsapp,
     preheader,
   });
   return sendTransactionalEmail({
     to: opts.to,
     subject,
     html,
-    fromName: identity.storeName,
+    fromName: identity.storeName || 'Smart Alerts',
     replyTo: identity.replyTo || config.sellerEmail,
     alertType: opts.alertType,
     productId: opts.productId,
@@ -367,12 +386,7 @@ export async function handleProductDeleted(event: {
 
   await stampSyncEvent('product_deleted');
 
-  const query = auth.elevate(items.query);
-  const update = auth.elevate(items.update);
-  const subs = await query(COLLECTIONS.subscriptions).eq('productId', productId).eq('state', 'waiting').limit(200).find();
-  for (const s of subs.items) {
-    await update(COLLECTIONS.subscriptions, { ...s, state: 'cancelled' });
-  }
+  await cancelWaitingByProduct(productId);
 }
 
 export async function handleOrderCreated(event: { metadata?: { id?: string } }) {
@@ -474,16 +488,23 @@ export async function runCronJobs() {
 
 export async function sendTestAlert(to: string) {
   if (!to) throw new Error('Email required for test alert');
+  const product = await getFirstProductSnapshot();
+  const productName = product?.name || 'Sample Product';
+  const productUrl = product?.url && product.url.startsWith('http') ? product.url : '';
+  const productPrice = product?.price != null ? `$${product.price.toFixed(2)}` : '$140.00';
   return deliverFromTemplate({
     triggerType: 'back_in_stock',
     to,
     alertType: 'back_in_stock',
+    productId: product?.productId,
     tokens: {
       customer_name: to.split('@')[0],
-      product_name: 'Sample Product',
-      product_url: '#',
+      product_name: productName,
+      product_url: productUrl || productName,
+      product_price: productPrice,
     },
-    buttonUrl: '#',
+    buttonUrl: productUrl || undefined,
+    productImage: product?.image || undefined,
     skipCustomerLimit: true,
   });
 }

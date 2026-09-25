@@ -3,17 +3,7 @@ import { items } from '@wix/data';
 import { COLLECTIONS } from './constants';
 import { getOrCreateConfig, updateConfig } from './config';
 import { canNotifyCustomer, logAlert } from './email';
-
-async function getSecret(name: string): Promise<string | undefined> {
-  try {
-    const { secrets } = await import('@wix/secrets');
-    const elevated = auth.elevate(secrets.getSecretValue);
-    const result = await elevated(name);
-    return (result as { value?: string })?.value || (result as unknown as string);
-  } catch {
-    return process.env[name] as string | undefined;
-  }
-}
+import { getSecret } from './secrets';
 
 export async function getTwilioCredentials() {
   const accountSid = await getSecret('TWILIO_ACCOUNT_SID');

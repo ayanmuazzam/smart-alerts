@@ -22,10 +22,17 @@ export default {
   displayField: 'title',
   dataPermissions: {
     itemInsert: 'PRIVILEGED',
-    itemRead: 'ANYONE',
+    itemRead: 'PRIVILEGED',
     itemRemove: 'PRIVILEGED',
     itemUpdate: 'PRIVILEGED',
   },
-  indexes: [],
+  indexes: [
+    {
+      fields: [{ path: 'productId' }, { path: 'variantId' }],
+    },
+    {
+      fields: [{ path: 'tracked' }],
+    },
+  ],
   initialData: [],
 } satisfies DataCollection;

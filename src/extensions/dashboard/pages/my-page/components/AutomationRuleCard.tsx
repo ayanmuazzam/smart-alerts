@@ -13,6 +13,7 @@ import {
   EditSmall,
   InfoCircle,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge, type MonoIconTone } from './MonoIconBadge';
 
 export interface AutomationRuleCardProps {
   id: string;
@@ -31,6 +32,13 @@ export interface AutomationRuleCardProps {
   onCustomizeTemplate?: () => void;
   // Backwards compatibility alias
   onCustomize?: () => void;
+}
+
+function toneForCard(channel?: string, group?: string): MonoIconTone {
+  if (channel === 'WhatsApp') return 'green';
+  if (channel === 'Storefront' || group === 'URGENCY') return 'violet';
+  if (group === 'SELLER') return 'orange';
+  return 'blue';
 }
 
 export function AutomationRuleCard({
@@ -73,26 +81,11 @@ export function AutomationRuleCard({
     }
   };
 
-  const getIconContainerStyle = () => {
-    if (channel === 'WhatsApp') {
-      return { backgroundColor: '#E6F7ED', color: '#008535' };
-    }
-    if (channel === 'Storefront' || group === 'URGENCY') {
-      return { backgroundColor: '#F3E8FF', color: '#7E22CE' };
-    }
-    if (group === 'SELLER') {
-      return { backgroundColor: '#FFF4E5', color: '#C25E00' };
-    }
-    return { backgroundColor: '#EBF4FF', color: '#116DFF' };
-  };
-
   const getChannelBadgeSkin = () => {
-    if (channel === 'WhatsApp') return 'success';
-    if (channel === 'Storefront') return 'premium';
-    return 'standard';
+    if (channel === 'WhatsApp') return 'success' as const;
+    if (channel === 'Storefront') return 'premium' as const;
+    return 'standard' as const;
   };
-
-  const iconStyle = getIconContainerStyle();
 
   return (
     <Box
@@ -108,24 +101,10 @@ export function AutomationRuleCard({
       }}
     >
       <Box verticalAlign="middle" gap="SP3" width="100%">
-        {/* Module Icon Container */}
-        <div
-          style={{
-            width: '42px',
-            height: '42px',
-            borderRadius: '8px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-            opacity: enabled ? 1 : 0.65,
-            ...iconStyle,
-          }}
-        >
+        <MonoIconBadge tone={toneForCard(channel, group)} size={42} radius={8} muted={!enabled}>
           {renderIcon()}
-        </div>
+        </MonoIconBadge>
 
-        {/* Title, Badges & Description */}
         <Box direction="vertical" gap="SP1" width="100%">
           <Box verticalAlign="middle" gap="SP2" style={{ flexWrap: 'wrap' }}>
             <Text weight="bold" size="medium" light={!enabled}>
@@ -143,13 +122,11 @@ export function AutomationRuleCard({
           </Text>
         </Box>
 
-        {/* Toggle Switch */}
         <Box verticalAlign="middle" gap="SP2" style={{ flexShrink: 0 }}>
           <ToggleSwitch checked={enabled} onChange={() => onToggle()} />
         </Box>
       </Box>
 
-      {/* Footer bar: Inline trigger summary + Quick Actions */}
       <Box
         verticalAlign="middle"
         align="space-between"
@@ -160,10 +137,9 @@ export function AutomationRuleCard({
           marginTop: '4px',
         }}
       >
-        {/* Trigger summary */}
         {enabled && triggerSummary ? (
           <Box verticalAlign="middle" gap="SP1">
-            <InfoCircle size="14" style={{ color: '#7A869A' }} />
+            <InfoCircle size="14" style={{ color: '#64748B' }} />
             <Text size="tiny" secondary>
               {triggerSummary}
             </Text>
@@ -174,7 +150,6 @@ export function AutomationRuleCard({
           </Text>
         )}
 
-        {/* Action Buttons */}
         <Box verticalAlign="middle" gap="SP2">
           {enabled && onCustomizeTemplate ? (
             <TextButton
@@ -198,4 +173,3 @@ export function AutomationRuleCard({
     </Box>
   );
 }
-

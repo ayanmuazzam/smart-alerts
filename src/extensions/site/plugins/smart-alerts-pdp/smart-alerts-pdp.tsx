@@ -1,24 +1,8 @@
-import { items } from '@wix/data';
-import { products, productsV3 } from '@wix/stores';
 import { fetchAppApi } from '../../lib/fetch-app-api';
+import { SITE_DEFAULT_MODULES } from '../../lib/defaults';
 
-/** Inline defaults — avoid importing app backend libs into the site plugin bundle. */
-const APP_NS = '@ayanmuazzam/us-smart-alerts';
-const CONFIG_ID = 'site-config';
-const COL_CONFIG = `${APP_NS}/config`;
-const COL_OVERRIDES = `${APP_NS}/productOverrides`;
-
-const DEFAULT_MODULES: Record<string, boolean> = {
-  backInStock: true,
-  priceDrop: true,
-  manualWhatsapp: true,
-  sellerOutOfStock: true,
-  sellerLowStock: true,
-  sellerNewOrder: true,
-  digest: false,
-  stockCounter: true,
-  restockCountdown: false,
-};
+/** Inline appearance defaults — avoid importing app backend libs into the site plugin bundle. */
+const DEFAULT_MODULES = SITE_DEFAULT_MODULES;
 
 const DEFAULT_BUTTON = {
   label: 'Notify Me',
@@ -103,9 +87,9 @@ function buttonCss(btn: ButtonStyle, overrides?: Partial<ButtonStyle>): string {
   const b = { ...btn, ...overrides };
   const width = resolveButtonWidth(b);
   return [
-    `background:${b.backgroundColor}`,
-    `color:${b.textColor}`,
-    `border:${Number(b.borderWidth) || 0}px solid ${b.borderColor}`,
+    `background:${safeColor(b.backgroundColor, '#000000')}`,
+    `color:${safeColor(b.textColor, '#FFFFFF')}`,
+    `border:${Number(b.borderWidth) || 0}px solid ${safeColor(b.borderColor, '#FFFFFF')}`,
     `border-radius:${Number(b.borderRadius) || 0}px`,
     `padding:${Number(b.paddingY) || 0}px ${Number(b.paddingX) || 0}px`,
     `font-size:${Number(b.fontSize) || 14}px`,
@@ -126,6 +110,12 @@ function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+const HEX_COLOR = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+function safeColor(value: unknown, fallback: string): string {
+  const raw = String(value ?? '').trim();
+  return HEX_COLOR.test(raw) ? raw : fallback;
 }
 
 function mergeButtons(raw?: Partial<typeof DEFAULT_APPEARANCE.buttons>) {
@@ -159,103 +149,63 @@ type ContextView = {
     buttons: typeof DEFAULT_APPEARANCE.buttons;
     modal: typeof DEFAULT_APPEARANCE.modal;
   };
-  override: { restockAt?: string; lowStockThreshold?: number } | null;
+  override: {
+    restockAt?: string;
+    lowStockThreshold?: number;
+    useGlobalThreshold?: boolean;
+  } | null;
   globalLowStockThreshold: number;
 };
 
-async function loadProduct(productId: string, variantId: string): Promise<ProductView | null> {
-  try {
-    const result = (await productsV3.getProduct(productId, {
-      fields: ['CURRENCY', 'URL', 'MEDIA_ITEMS_INFO'] as never,
-    })) as any;
-    const product = result?.product || result;
-    if (!product?._id && !product?.name) throw new Error('empty v3 product');
-    const variants = product.variantsInfo?.variants || [];
-    const variant =
-      (variantId && variants.find((v: { id?: string }) => v.id === variantId)) || variants[0];
-    const availability = product.inventory?.availabilityStatus || 'IN_STOCK';
-    return {
-      productId,
-      variantId: variant?.id || '',
-      name: product.name || '',
-      url: product.url?.url || '',
-      image: product.media?.main?.image || '',
-      price: Number(variant?.price?.actualPrice?.amount || 0),
-      inStock: availability === 'IN_STOCK' || availability === 'PARTIALLY_OUT_OF_STOCK',
-      quantity: null,
-    };
-  } catch (v3Err) {
-    console.warn('[smart-alerts-pdp] v3 getProduct failed, trying v1', v3Err);
-    try {
-      const result = (await products.getProduct(productId)) as any;
-      const product = result?.product || result;
-      if (!product) return null;
-      const status = product.stock?.inventoryStatus || 'IN_STOCK';
-      return {
-        productId,
-        variantId: variantId || '',
-        name: product.name || '',
-        url: product.productPageUrl?.base || '',
-        image: product.media?.mainMedia?.image?.url || '',
-        price: Number(product.priceData?.discountedPrice ?? product.priceData?.price ?? 0),
-        inStock: status !== 'OUT_OF_STOCK',
-        quantity: product.stock?.quantity ?? null,
-      };
-    } catch (v1Err) {
-      console.error('[smart-alerts-pdp] product load failed', v1Err);
-      return null;
-    }
+async function loadContext(
+  endpoint: (path: string) => string,
+  apiFetch: (path: string, init?: RequestInit) => Promise<Response>,
+  productId: string,
+  variantId: string,
+): Promise<ContextView | null> {
+  const qs = new URLSearchParams({ productId });
+  if (variantId) qs.set('variantId', variantId);
+  const res = await apiFetch(`/api/product-context?${qs.toString()}`);
+  if (!res.ok) {
+    throw new Error(`product-context failed (${res.status})`);
   }
-}
+  const json = await res.json();
+  const snapshot = json.product;
+  if (!snapshot?.productId) return null;
 
-async function loadConfigBits(productId: string, variantId: string) {
-  let modules = { ...DEFAULT_MODULES };
-  let appearance = {
-    ...DEFAULT_APPEARANCE,
-    colors: { ...DEFAULT_APPEARANCE.colors },
-    buttons: mergeButtons(),
-    modal: mergeModal(),
+  return {
+    product: {
+      productId: snapshot.productId,
+      variantId: snapshot.variantId || variantId || '',
+      name: snapshot.name || '',
+      url: snapshot.url || '',
+      image: snapshot.image || '',
+      price: Number(snapshot.price || 0),
+      inStock: Boolean(snapshot.inStock),
+      quantity: snapshot.quantity != null ? Number(snapshot.quantity) : null,
+    },
+    modules: { ...DEFAULT_MODULES, ...(json.modules || {}) },
+    appearance: {
+      ...DEFAULT_APPEARANCE,
+      ...(json.appearance || {}),
+      colors: { ...DEFAULT_APPEARANCE.colors, ...(json.appearance?.colors || {}) },
+      buttons: mergeButtons(json.appearance?.buttons),
+      modal: mergeModal(json.appearance?.modal),
+    },
+    override: json.override
+      ? {
+          restockAt: json.override.restockAt
+            ? String(json.override.restockAt)
+            : undefined,
+          lowStockThreshold:
+            json.override.lowStockThreshold != null
+              ? Number(json.override.lowStockThreshold)
+              : undefined,
+          useGlobalThreshold: json.override.useGlobalThreshold,
+        }
+      : null,
+    globalLowStockThreshold: Number(json.globalLowStockThreshold ?? 5),
   };
-  let globalLowStockThreshold = 5;
-  let override: ContextView['override'] = null;
-
-  try {
-    const config = (await items.get(COL_CONFIG, CONFIG_ID)) as any;
-    if (config) {
-      modules = { ...DEFAULT_MODULES, ...(config.modules || {}) };
-      appearance = {
-        ...DEFAULT_APPEARANCE,
-        ...(config.appearance || {}),
-        colors: { ...DEFAULT_APPEARANCE.colors, ...(config.appearance?.colors || {}) },
-        buttons: mergeButtons(config.appearance?.buttons),
-        modal: mergeModal(config.appearance?.modal),
-      };
-      globalLowStockThreshold = Number(config.globalLowStockThreshold ?? 5);
-    }
-  } catch (err) {
-    console.warn('[smart-alerts-pdp] config read failed; using defaults', err);
-  }
-
-  try {
-    const result = await items
-      .query(COL_OVERRIDES)
-      .eq('productId', productId)
-      .eq('variantId', variantId || '')
-      .limit(1)
-      .find();
-    const row = result.items?.[0] as any;
-    if (row) {
-      override = {
-        restockAt: row.restockAt ? String(row.restockAt) : undefined,
-        lowStockThreshold:
-          row.lowStockThreshold != null ? Number(row.lowStockThreshold) : undefined,
-      };
-    }
-  } catch (err) {
-    console.warn('[smart-alerts-pdp] override read failed', err);
-  }
-
-  return { modules, appearance, globalLowStockThreshold, override };
 }
 
 class SmartAlertsPdp extends HTMLElement {
@@ -309,14 +259,18 @@ class SmartAlertsPdp extends HTMLElement {
     const variantId = this.getAttribute('selected-variant-id') || '';
 
     try {
-      const product = await loadProduct(productId, variantId);
-      if (!product) {
+      const ctx = await loadContext(
+        (p) => this.endpoint(p),
+        (p, init) => this.apiFetch(p, init),
+        productId,
+        variantId,
+      );
+      if (!ctx) {
         this.root.innerHTML =
           '<div style="font-size:12px;color:#64748B;margin:8px 0;">Alerts unavailable for this product.</div>';
         return;
       }
-      const bits = await loadConfigBits(productId, variantId);
-      this.render({ product, ...bits });
+      this.render(ctx);
     } catch (err) {
       console.error('[smart-alerts-pdp]', err);
       // Last-resort: still show subscribe UI with defaults so OAuth/API issues
@@ -359,17 +313,17 @@ class SmartAlertsPdp extends HTMLElement {
     if (!this.root) return;
 
     const colors = data.appearance?.colors || {};
-    const primary = colors.primary || '#0F766E';
-    const buttonText = colors.buttonText || '#fff';
-    const badge = colors.badge || '#F59E0B';
-    const muted = colors.muted || '#64748B';
-    const text = colors.text || '#0F172A';
-    const background = colors.background || '#FFFFFF';
-    const border = colors.secondary || '#e2e8f0';
-    const labelColor = colors.label || muted;
-    const inputBg = colors.inputBackground || '#FFFFFF';
-    const inputText = colors.inputText || text;
-    const inputBorder = colors.inputBorder || border;
+    const primary = safeColor(colors.primary, '#0F766E');
+    const buttonText = safeColor(colors.buttonText, '#fff');
+    const badge = safeColor(colors.badge, '#F59E0B');
+    const muted = safeColor(colors.muted, '#64748B');
+    const text = safeColor(colors.text, '#0F172A');
+    const background = safeColor(colors.background, '#FFFFFF');
+    const border = safeColor(colors.secondary, '#e2e8f0');
+    const labelColor = safeColor(colors.label, muted);
+    const inputBg = safeColor(colors.inputBackground, '#FFFFFF');
+    const inputText = safeColor(colors.inputText, text);
+    const inputBorder = safeColor(colors.inputBorder, border);
     const buttons = mergeButtons(data.appearance?.buttons);
     const modal = mergeModal(data.appearance?.modal);
     const notifyBtn = buttons.notifyMe;
@@ -406,9 +360,9 @@ class SmartAlertsPdp extends HTMLElement {
 
     const qty = data.product.quantity;
     const threshold =
-      data.override?.lowStockThreshold ??
-      data.appearance?.stockThreshold ??
-      data.globalLowStockThreshold;
+      data.override?.useGlobalThreshold === false && data.override?.lowStockThreshold != null
+        ? data.override.lowStockThreshold
+        : (data.appearance?.stockThreshold ?? data.globalLowStockThreshold);
     if (data.modules.stockCounter && qty != null && qty > 0 && qty <= threshold) {
       parts.push(
         `<div style="margin:8px 0;font-weight:600;color:${badge};">Only ${qty} left</div>`,
@@ -529,11 +483,22 @@ class SmartAlertsPdp extends HTMLElement {
       this.closeModal('sa-bis-modal');
     });
 
-    this.root.querySelector('#sa-bis')?.addEventListener('click', async () => {
+    const bisBtn = this.root.querySelector('#sa-bis') as HTMLButtonElement | null;
+    const priceSubmitBtn = this.root.querySelector('#sa-price-submit') as HTMLButtonElement | null;
+    const notifyBtnLabel = bisBtn?.textContent || 'Notify me';
+    const priceSubmitLabel = priceSubmitBtn?.textContent || 'Subscribe';
+
+    bisBtn?.addEventListener('click', async () => {
+      const btn = this.root!.querySelector('#sa-bis') as HTMLButtonElement | null;
       const email = (this.root!.querySelector('#sa-email') as HTMLInputElement)?.value;
       const phone = (this.root!.querySelector('#sa-phone') as HTMLInputElement | null)?.value;
       const consent = (this.root!.querySelector('#sa-consent') as HTMLInputElement)?.checked;
       const msg = this.root!.querySelector('#sa-msg') as HTMLElement;
+      if (btn?.disabled) return;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Subscribing…';
+      }
       try {
         const res = await this.apiFetch('/api/subscribe', {
           method: 'POST',
@@ -541,9 +506,6 @@ class SmartAlertsPdp extends HTMLElement {
           body: JSON.stringify({
             productId: product.productId,
             variantId: product.variantId,
-            productName: product.name,
-            productUrl: product.url,
-            productImage: product.image,
             subscriptionType: 'back_in_stock',
             email,
             phone: phone || undefined,
@@ -562,6 +524,10 @@ class SmartAlertsPdp extends HTMLElement {
       } catch (e) {
         msg.style.color = '#b91c1c';
         msg.textContent = e instanceof Error ? e.message : 'Failed';
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = notifyBtnLabel;
+        }
       }
     });
 
@@ -575,11 +541,17 @@ class SmartAlertsPdp extends HTMLElement {
       this.closeModal('sa-price-modal');
     });
 
-    this.root.querySelector('#sa-price-submit')?.addEventListener('click', async () => {
+    priceSubmitBtn?.addEventListener('click', async () => {
+      const btn = this.root!.querySelector('#sa-price-submit') as HTMLButtonElement | null;
       const email = (this.root!.querySelector('#sa-price-email') as HTMLInputElement)?.value;
       const phone = (this.root!.querySelector('#sa-price-phone') as HTMLInputElement | null)?.value;
       const consent = (this.root!.querySelector('#sa-price-consent') as HTMLInputElement)?.checked;
       const msg = this.root!.querySelector('#sa-price-msg') as HTMLElement;
+      if (btn?.disabled) return;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Subscribing…';
+      }
       try {
         const res = await this.apiFetch('/api/subscribe', {
           method: 'POST',
@@ -587,9 +559,6 @@ class SmartAlertsPdp extends HTMLElement {
           body: JSON.stringify({
             productId: product.productId,
             variantId: product.variantId,
-            productName: product.name,
-            productUrl: product.url,
-            productImage: product.image,
             subscriptionType: 'price_drop',
             email,
             phone: phone || undefined,
@@ -609,6 +578,10 @@ class SmartAlertsPdp extends HTMLElement {
       } catch (e) {
         msg.style.color = '#b91c1c';
         msg.textContent = e instanceof Error ? e.message : 'Failed';
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = priceSubmitLabel;
+        }
       }
     });
 

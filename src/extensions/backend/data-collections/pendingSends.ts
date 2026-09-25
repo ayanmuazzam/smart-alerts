@@ -22,6 +22,10 @@ export default {
     itemRemove: 'PRIVILEGED',
     itemUpdate: 'PRIVILEGED',
   },
-  indexes: [],
+  indexes: [
+    {
+      fields: [{ path: 'status' }, { path: 'scheduledFor' }],
+    },
+  ],
   initialData: [],
 } satisfies DataCollection;

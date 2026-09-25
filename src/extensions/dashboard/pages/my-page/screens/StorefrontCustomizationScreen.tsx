@@ -16,6 +16,7 @@ import {
   Tag,
   Chat,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge } from '../components/MonoIconBadge';
 import { CornerWidgetPreview } from '../components/CornerWidgetPreview';
 import { DEFAULT_APPEARANCE } from '../../../../../lib/smart-alerts/constants';
 
@@ -223,22 +224,9 @@ export function StorefrontCustomizationScreen({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div
-            style={{
-              width: '42px',
-              height: '42px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(139, 92, 246, 0.28)',
-              flexShrink: 0,
-            }}
-          >
+          <MonoIconBadge tone="violet" size={42}>
             <Package size="20" />
-          </div>
+          </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ fontSize: '16px', fontWeight: 700, color: '#4C1D95' }}>
               Storefront Widget &amp; Urgency Studio

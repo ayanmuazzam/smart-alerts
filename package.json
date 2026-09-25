@@ -23,12 +23,12 @@
     "@wix/design-system": "^1.154.0",
     "@wix/ecom": "^1.0.2514",
     "@wix/editor": "^1.356.0",
+    "@wix/email-transmissions": "^1.0.13",
     "@wix/essentials": "^0.1.23",
     "@wix/secrets": "^1.0.75",
     "@wix/stores": "^1.0.918",
     "astro": "^5.8.0",
-    "react-to-webcomponent": "^2.0.0",
-    "resend": "^4.0.0"
+    "react-to-webcomponent": "^2.0.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",

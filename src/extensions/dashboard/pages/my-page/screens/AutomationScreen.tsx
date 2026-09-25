@@ -37,6 +37,11 @@ type Props = {
   listSearch: string;
   setListSearch: (s: string) => void;
   listItems: any[];
+  listTotalCount?: number;
+  listSkip?: number;
+  listStateFilter?: string;
+  setListStateFilter?: (s: string) => void;
+  onLoadMoreLists?: () => void;
   selectedSubs: string[];
   setSelectedSubs: (ids: string[] | ((prev: string[]) => string[])) => void;
   whatsapp: any[];
@@ -49,6 +54,9 @@ type Props = {
     React.SetStateAction<Record<string, { lowStockThreshold: string; restockAt: string }>>
   >;
   alerts: any[];
+  alertsTotalCount?: number;
+  alertsSkip?: number;
+  onLoadMoreAlerts?: () => void;
   quota: any;
   selectedAlerts: string[];
   setSelectedAlerts: (ids: string[] | ((prev: string[]) => string[])) => void;
@@ -56,6 +64,7 @@ type Props = {
   setRulesModule: (key: string | null) => void;
   onSaveModules: (key: string, value: boolean) => void;
   onSaveRules: () => void;
+  isSavingRules?: boolean;
   onReload: () => void;
   onRun: (fn: () => Promise<void>, msg?: string) => void;
   onGoSettings: () => void;
@@ -115,6 +124,10 @@ export function AutomationScreen(props: Props) {
     listSearch,
     setListSearch,
     listItems,
+    listTotalCount = 0,
+    listStateFilter = '',
+    setListStateFilter,
+    onLoadMoreLists,
     selectedSubs,
     setSelectedSubs,
     whatsapp,
@@ -125,6 +138,8 @@ export function AutomationScreen(props: Props) {
     draftOverrides,
     setDraftOverrides,
     alerts,
+    alertsTotalCount = 0,
+    onLoadMoreAlerts,
     quota,
     selectedAlerts,
     setSelectedAlerts,
@@ -132,6 +147,7 @@ export function AutomationScreen(props: Props) {
     setRulesModule,
     onSaveModules,
     onSaveRules,
+    isSavingRules,
     onReload,
     onRun,
     onGoSettings,
@@ -405,6 +421,7 @@ export function AutomationScreen(props: Props) {
                 onClose={() => setRulesModule(null)}
                 onChange={(patch) => props.setConfig((c: any) => ({ ...c, ...patch }))}
                 onSave={onSaveRules}
+                isSaving={isSavingRules}
                 onGoCustomization={(target) =>
                   onGoCustomization(target, activeMeta?.templateKey)
                 }
@@ -421,6 +438,10 @@ export function AutomationScreen(props: Props) {
             listSearch={listSearch}
             setListSearch={setListSearch}
             listItems={listItems}
+            listTotalCount={listTotalCount}
+            listStateFilter={listStateFilter}
+            setListStateFilter={setListStateFilter}
+            onLoadMore={onLoadMoreLists}
             selectedSubs={selectedSubs}
             setSelectedSubs={setSelectedSubs}
             onExportCsv={async () => {
@@ -537,6 +558,8 @@ export function AutomationScreen(props: Props) {
           <LogsAndQuotaWorkspace
             quota={quota}
             alerts={alerts}
+            alertsTotalCount={alertsTotalCount}
+            onLoadMore={onLoadMoreAlerts}
             selectedAlerts={selectedAlerts}
             setSelectedAlerts={setSelectedAlerts}
             onDeleteSelectedAlerts={async () => {

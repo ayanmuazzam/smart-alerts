@@ -18,6 +18,7 @@ import {
   DeleteSmall,
   Sparkles,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge } from './MonoIconBadge';
 
 export interface WhatsAppQueueItem {
   _id: string;
@@ -87,22 +88,9 @@ export function WhatsAppQueueWorkspace({
         }}
       >
         <Box verticalAlign="middle" gap="SP3">
-          <div
-            style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(37, 211, 102, 0.28)',
-              flexShrink: 0,
-            }}
-          >
+          <MonoIconBadge tone="blue" size={40}>
             <Chat size="20" />
-          </div>
+          </MonoIconBadge>
           <Box direction="vertical" gap="2px">
             <Text weight="bold" size="medium">
               1-Click WhatsApp Restock Dispatch
@@ -158,22 +146,9 @@ export function WhatsAppQueueWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(37, 211, 102, 0.25)',
-              flexShrink: 0,
-            }}
-          >
+          <MonoIconBadge tone="blue" size={44}>
             <Chat size="20" />
-          </div>
+          </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: FONT_SANS }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1 }}>
               {whatsapp.length}
@@ -199,22 +174,9 @@ export function WhatsAppQueueWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(59, 130, 246, 0.25)',
-              flexShrink: 0,
-            }}
-          >
+          <MonoIconBadge tone="blue" size={44}>
             <Sparkles size="20" />
-          </div>
+          </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: FONT_SANS }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1 }}>
               {isApiMode ? 'API Mode' : '1-Click wa.me'}
@@ -240,22 +202,9 @@ export function WhatsAppQueueWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(139, 92, 246, 0.25)',
-              flexShrink: 0,
-            }}
-          >
+          <MonoIconBadge tone="violet" size={44}>
             <Package size="20" />
-          </div>
+          </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: FONT_SANS }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1 }}>
               {whatsapp.length > 0 ? 'Ready' : 'Clear'}
@@ -398,21 +347,9 @@ export function WhatsAppQueueWorkspace({
                         width: '26%',
                         render: (row: WhatsAppQueueItem) => (
                           <Box verticalAlign="middle" gap="SP2">
-                            <div
-                              style={{
-                                width: '34px',
-                                height: '34px',
-                                borderRadius: '8px',
-                                backgroundColor: '#EFF6FF',
-                                color: '#116DFF',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                              }}
-                            >
+                            <MonoIconBadge tone="blue" size={34} radius={8}>
                               <Package size="16" />
-                            </div>
+                            </MonoIconBadge>
                             <Box direction="vertical" gap="2px" style={{ minWidth: 0 }}>
                               <span
                                 style={{

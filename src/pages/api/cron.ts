@@ -1,22 +1,23 @@
 import type { APIRoute } from 'astro';
 import { runCronJobs } from '../../lib/smart-alerts/engine';
+import { getSecret } from '../../lib/smart-alerts/secrets';
 
 async function authorized(request: Request): Promise<boolean> {
   const header = request.headers.get('x-cron-secret') || '';
   let expected = process.env.CRON_SECRET || '';
   if (!expected) {
-    try {
-      const { secrets } = await import('@wix/secrets');
-      const { auth } = await import('@wix/essentials');
-      const elevated = auth.elevate(secrets.getSecretValue);
-      const result = await elevated('CRON_SECRET');
-      expected = (result as { value?: string })?.value || String(result || '');
-    } catch {
-      expected = '';
-    }
+    expected = (await getSecret('CRON_SECRET')) || '';
   }
-  if (!expected) return false;
-  return header === expected;
+  if (!expected || !header) return false;
+  try {
+    const a = Buffer.from(header);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length) return false;
+    const { timingSafeEqual } = await import('node:crypto');
+    return timingSafeEqual(a, b);
+  } catch {
+    return header === expected;
+  }
 }
 
 export const POST: APIRoute = async ({ request }) => {

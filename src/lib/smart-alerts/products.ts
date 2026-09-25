@@ -36,6 +36,95 @@ export type ProductSnapshot = {
   stockStatus: string;
 };
 
+/** Pull a usable https image URL from V1 or V3 product media shapes. */
+function extractProductImage(product: any): string {
+  const candidates = [
+    product?.media?.main?.url,
+    product?.media?.main?.thumbnail?.url,
+    product?.media?.main?.image?.url,
+    typeof product?.media?.main?.image === 'string' ? product.media.main.image : '',
+    product?.media?.itemsInfo?.items?.[0]?.url,
+    product?.media?.itemsInfo?.items?.[0]?.image?.url,
+    product?.media?.itemsInfo?.items?.[0]?.thumbnail?.url,
+    product?.media?.mainMedia?.image?.url,
+    product?.media?.items?.[0]?.image?.url,
+    product?.media?.items?.[0]?.url,
+  ];
+  for (const c of candidates) {
+    const s = String(c || '').trim();
+    if (s.startsWith('http://') || s.startsWith('https://')) return s;
+  }
+  // Wix media ids → static CDN URL when only an id is present
+  const mediaId =
+    product?.media?.main?._id ||
+    product?.media?.itemsInfo?.items?.[0]?._id ||
+    product?.media?.itemsInfo?.items?.[0]?.id ||
+    '';
+  if (mediaId && !String(mediaId).includes('://')) {
+    return `https://static.wixstatic.com/media/${mediaId}`;
+  }
+  return '';
+}
+
+function isAbsoluteHttpUrl(value: unknown): boolean {
+  const s = String(value || '').trim();
+  return s.startsWith('http://') || s.startsWith('https://');
+}
+
+/** Absolute product page URL from V1/V3 shapes (relative paths alone are not enough for email). */
+function extractProductUrl(product: any): string {
+  const joinedV1 =
+    product?.productPageUrl?.base && product?.productPageUrl?.path
+      ? `${product.productPageUrl.base}${product.productPageUrl.path}`
+      : '';
+  const candidates = [
+    product?.url?.url,
+    typeof product?.url === 'string' ? product.url : '',
+    joinedV1,
+    product?.productPageUrl?.base,
+  ];
+  for (const c of candidates) {
+    if (isAbsoluteHttpUrl(c)) return String(c).trim();
+  }
+  return '';
+}
+
+async function resolveAbsoluteProductUrl(productId: string, product: any): Promise<string> {
+  const direct = extractProductUrl(product);
+  if (direct) return direct;
+
+  // V3 often returns a relative path — V1 productPageUrl.base+path is absolute.
+  try {
+    const getV1 = auth.elevate(products.getProduct);
+    const v1Result = (await getV1(productId)) as any;
+    const v1Product = v1Result?.product || v1Result;
+    const fromV1 = extractProductUrl(v1Product);
+    if (fromV1) return fromV1;
+  } catch {
+    /* V1 unavailable on some catalogs */
+  }
+
+  const relative = String(
+    product?.url?.url || product?.productPageUrl?.path || product?.slug || '',
+  ).trim();
+  if (!relative || isAbsoluteHttpUrl(relative)) return relative;
+
+  // Last resort: take site base from any V1 product that has productPageUrl.base
+  try {
+    const query = auth.elevate(products.queryProducts);
+    const result = await (query() as any).limit(1).find();
+    const base = String(result?.items?.[0]?.productPageUrl?.base || '').replace(/\/?$/, '/');
+    if (isAbsoluteHttpUrl(base)) {
+      const path = relative.replace(/^\//, '');
+      const slugPath = path.includes('/') ? path : `product-page/${path}`;
+      return `${base}${slugPath}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return '';
+}
+
 export async function getProductSnapshot(
   productId: string,
   variantId?: string,
@@ -60,8 +149,8 @@ export async function getProductSnapshot(
       productId,
       variantId: variant?.id || '',
       name: product.name || '',
-      url: product.url?.url || '',
-      image: product.media?.main?.image || '',
+      url: await resolveAbsoluteProductUrl(productId, product),
+      image: extractProductImage(product),
       price: amount,
       inStock: availability === 'IN_STOCK' || availability === 'PARTIALLY_OUT_OF_STOCK',
       quantity,
@@ -79,8 +168,8 @@ export async function getProductSnapshot(
     productId,
     variantId: variantId || '',
     name: product.name || '',
-    url: product.productPageUrl?.base || '',
-    image: product.media?.mainMedia?.image?.url || '',
+    url: await resolveAbsoluteProductUrl(productId, product),
+    image: extractProductImage(product),
     price,
     inStock: status !== 'OUT_OF_STOCK',
     quantity: product.stock?.quantity ?? null,
@@ -128,6 +217,17 @@ export async function searchProducts(term: string, limit = 20) {
     stockStatus: p.stock?.inventoryStatus || '',
     price: Number(p.priceData?.price || 0),
   }));
+}
+
+/** First catalog product — used for Send Test Alert preview content. */
+export async function getFirstProductSnapshot(): Promise<ProductSnapshot | null> {
+  try {
+    const [first] = await searchProducts('', 1);
+    if (!first?.id) return null;
+    return getProductSnapshot(first.id);
+  } catch {
+    return null;
+  }
 }
 
 export async function loadOutOfStockProducts(limit = 50) {

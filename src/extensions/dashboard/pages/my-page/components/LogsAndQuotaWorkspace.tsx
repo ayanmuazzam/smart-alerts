@@ -31,11 +31,14 @@ export interface AlertHistoryItem {
   to?: string;
   status?: string;
   sentAt?: string;
+  errorMessage?: string;
 }
 
 export interface LogsAndQuotaWorkspaceProps {
   quota: any;
   alerts: AlertHistoryItem[];
+  alertsTotalCount?: number;
+  onLoadMore?: () => void;
   selectedAlerts: string[];
   setSelectedAlerts: (ids: string[] | ((prev: string[]) => string[])) => void;
   onDeleteSelectedAlerts: () => Promise<void>;
@@ -74,6 +77,8 @@ function formatAlertType(type?: string): { title: string; icon: React.ReactNode 
 export function LogsAndQuotaWorkspace({
   quota,
   alerts,
+  alertsTotalCount,
+  onLoadMore,
   selectedAlerts,
   setSelectedAlerts,
   onDeleteSelectedAlerts,
@@ -712,35 +717,45 @@ export function LogsAndQuotaWorkspace({
                           const color = isSuccess ? '#065F46' : isFailed ? '#991B1B' : '#1D4ED8';
                           const border = isSuccess ? '#A7F3D0' : isFailed ? '#FECDD3' : '#BFDBFE';
                           const dotColor = isSuccess ? '#10B981' : isFailed ? '#EF4444' : '#3B82F6';
-                          const label = isSuccess ? 'Delivered' : isFailed ? 'Failed' : row.status || 'Sent';
+                          // "sent" = Wix accepted the transmission (async). Not mailbox proof.
+                          const label = isSuccess ? 'Sent' : isFailed ? 'Failed' : row.status || 'Sent';
+                          const err = row.errorMessage;
 
                           return (
-                            <div
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                padding: '4px 10px',
-                                borderRadius: '20px',
-                                fontSize: '11.5px',
-                                fontWeight: 600,
-                                backgroundColor: bg,
-                                color: color,
-                                border: `1px solid ${border}`,
-                                fontFamily: FONT_SANS,
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              <span
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <div
                                 style={{
-                                  width: '6px',
-                                  height: '6px',
-                                  borderRadius: '50%',
-                                  backgroundColor: dotColor,
-                                  boxShadow: `0 0 0 2px ${dotColor}33`,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  width: 'fit-content',
+                                  padding: '4px 10px',
+                                  borderRadius: '20px',
+                                  fontSize: '11.5px',
+                                  fontWeight: 600,
+                                  backgroundColor: bg,
+                                  color: color,
+                                  border: `1px solid ${border}`,
+                                  fontFamily: FONT_SANS,
+                                  whiteSpace: 'nowrap',
                                 }}
-                              />
-                              <span>{label}</span>
+                              >
+                                <span
+                                  style={{
+                                    width: '6px',
+                                    height: '6px',
+                                    borderRadius: '50%',
+                                    backgroundColor: dotColor,
+                                    boxShadow: `0 0 0 2px ${dotColor}33`,
+                                  }}
+                                />
+                                <span>{label}</span>
+                              </div>
+                              {isFailed && err ? (
+                                <span style={{ fontSize: '11px', color: '#991B1B', lineHeight: 1.3 }}>
+                                  {err}
+                                </span>
+                              ) : null}
                             </div>
                           );
                         },
@@ -761,6 +776,13 @@ export function LogsAndQuotaWorkspace({
                 </div>
               </div>
             )}
+            {onLoadMore && (alertsTotalCount ?? 0) > alerts.length ? (
+              <Box marginTop="SP3" align="center">
+                <Button size="small" priority="secondary" onClick={onLoadMore}>
+                  Load more
+                </Button>
+              </Box>
+            ) : null}
           </Box>
         </Card.Content>
       </Card>

@@ -8,6 +8,7 @@ import {
   DateAndTime,
   Check,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge } from '../components/MonoIconBadge';
 import type { SettingsSub } from '../adminApi';
 import { SettingsWorkspace } from '../components/SettingsWorkspace';
 

@@ -360,6 +360,27 @@ export function SettingsWorkspace({
                   />
                 </FormField>
               </Cell>
+              <Cell span={6}>
+                <FormField
+                  label="Batch hour (UTC)"
+                  infoContent="When hourly batch mode is on, pending alerts flush at this UTC hour."
+                >
+                  <NumberInput
+                    min={0}
+                    max={23}
+                    value={limits.batchHourUtc ?? 9}
+                    onChange={(value) =>
+                      setConfig((c: any) => ({
+                        ...c,
+                        notificationLimits: {
+                          ...c.notificationLimits,
+                          batchHourUtc: Number(value ?? 9),
+                        },
+                      }))
+                    }
+                  />
+                </FormField>
+              </Cell>
             </Layout>
           </Card.Content>
         </Card>
@@ -479,6 +500,26 @@ export function SettingsWorkspace({
               </Cell>
               <Cell span={4}>
                 <FormField
+                  label="Price drop minimum amount"
+                  infoContent="Absolute currency amount the price must drop before notifying."
+                >
+                  <NumberInput
+                    min={0}
+                    value={triggers.priceDropMinAmount ?? 0}
+                    onChange={(value) =>
+                      setConfig((c: any) => ({
+                        ...c,
+                        triggerRules: {
+                          ...c.triggerRules,
+                          priceDropMinAmount: Number(value ?? 0),
+                        },
+                      }))
+                    }
+                  />
+                </FormField>
+              </Cell>
+              <Cell span={4}>
+                <FormField
                   label="Price-drop cooldown (hours)"
                   infoContent="Prevents sending another price alert for the same product within this window."
                 >
@@ -535,6 +576,7 @@ export function SettingsWorkspace({
                   <Dropdown
                     selectedId={config.digestFrequency || 'weekly'}
                     options={[
+                      { id: 'off', value: 'Off (disabled)' },
                       { id: 'daily', value: 'Daily summary' },
                       { id: 'weekly', value: 'Weekly digest' },
                     ]}

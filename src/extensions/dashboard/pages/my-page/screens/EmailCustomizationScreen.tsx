@@ -24,6 +24,7 @@ import {
   Edit,
   MagicWandSmall,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge } from '../components/MonoIconBadge';
 import { LiveEmailPreview } from '../components/LiveEmailPreview';
 import { TEMPLATE_VARIABLES } from '../adminApi';
 import { getDefaultEmailTemplate } from '../../../../../lib/smart-alerts/constants';
@@ -162,22 +163,9 @@ export function EmailCustomizationScreen({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div
-            style={{
-              width: '42px',
-              height: '42px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(37, 99, 235, 0.28)',
-              flexShrink: 0,
-            }}
-          >
+          <MonoIconBadge tone="blue" size={42}>
             <Email size="20" />
-          </div>
+          </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ fontSize: '16px', fontWeight: 700, color: '#0F172A' }}>
               Email Template Designer &amp; Brand Studio

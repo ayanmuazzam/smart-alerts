@@ -20,6 +20,7 @@ type Props = {
   onClose: () => void;
   onChange: (patch: Record<string, unknown>) => void;
   onSave: () => void;
+  isSaving?: boolean;
   onGoCustomization?: (target?: 'email' | 'storefront') => void;
 };
 
@@ -30,6 +31,7 @@ export function ModuleRulesSidePanel({
   onClose,
   onChange,
   onSave,
+  isSaving,
   onGoCustomization,
 }: Props) {
   if (!moduleKey) return null;
@@ -309,10 +311,12 @@ export function ModuleRulesSidePanel({
       <CustomModalLayout
         title={title}
         subtitle="Configure trigger thresholds and delivery rules for this module"
-        primaryButtonText="Save rules"
+        primaryButtonText={isSaving ? 'Saving…' : 'Save rules'}
         primaryButtonOnClick={onSave}
+        primaryButtonProps={{ disabled: Boolean(isSaving) }}
         secondaryButtonText="Cancel"
         secondaryButtonOnClick={onClose}
+        secondaryButtonProps={{ disabled: Boolean(isSaving) }}
         onCloseButtonClick={onClose}
         width="560px"
         content={content}

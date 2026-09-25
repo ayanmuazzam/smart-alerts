@@ -22,6 +22,13 @@ export default {
     itemRemove: 'PRIVILEGED',
     itemUpdate: 'PRIVILEGED',
   },
-  indexes: [],
+  indexes: [
+    {
+      fields: [{ path: 'status' }, { path: 'sentAt', order: 'DESC' }],
+    },
+    {
+      fields: [{ path: 'to' }, { path: 'channel' }, { path: 'status' }],
+    },
+  ],
   initialData: [],
 } satisfies DataCollection;

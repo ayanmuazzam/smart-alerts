@@ -6,6 +6,8 @@ import {
   type AlertType,
 } from './constants';
 import { getOrCreateConfig, type SiteConfig } from './config';
+import { escapeHtml, safeHexColor, safeUrl } from './sanitize';
+import { sendWixTransactionalEmail } from './wix-email';
 
 type TokenMap = Record<string, string | number | undefined | null>;
 
@@ -37,16 +39,23 @@ export function buildEmailHtml(opts: {
   closingText?: string;
   signoffText?: string;
   brandColor?: string;
+  secondaryColor?: string;
   logoUrl?: string;
   footerText?: string;
+  supportWhatsapp?: string;
   preheader?: string;
 }): string {
-  const brandColor = opts.brandColor || '#2563eb';
-  const preheaderHtml = opts.preheader
-    ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;mso-hide:all;">${opts.preheader}</div>`
+  const brandColor = safeHexColor(opts.brandColor, '#2563eb');
+  const secondaryColor = safeHexColor(opts.secondaryColor, '#64748B');
+  const logoUrl = safeUrl(opts.logoUrl);
+  // Never fall back to "#" — Wix Email click-tracking turns that into a broken shoutout page.
+  const buttonUrl = safeUrl(opts.buttonUrl);
+  const productImage = safeUrl(opts.productImage);
+  const preheader = escapeHtml(opts.preheader);
+  const preheaderHtml = preheader
+    ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;mso-hide:all;">${preheader}</div>`
     : '';
 
-  // Header styling
   const headerStyle = opts.headerStyle || 'dark';
   let headerBg = '#111827';
   let headerColor = '#ffffff';
@@ -60,31 +69,28 @@ export function buildEmailHtml(opts: {
     headerBorder = '1px solid #e5e7eb';
   }
 
-  const headerTitle = opts.headerText || 'YOUR STORE';
-  const headerContent = opts.logoUrl
-    ? `<img src="${opts.logoUrl}" alt="${headerTitle}" style="max-height:44px;max-width:200px;object-fit:contain;vertical-align:middle;" />`
+  const headerTitle = escapeHtml(opts.headerText || 'YOUR STORE');
+  const headerContent = logoUrl
+    ? `<img src="${escapeHtml(logoUrl)}" alt="${headerTitle}" style="max-height:44px;max-width:200px;object-fit:contain;vertical-align:middle;" />`
     : `<h1 style="margin:0;font-size:20px;letter-spacing:2px;text-transform:uppercase;color:${headerColor};font-weight:700;">${headerTitle}</h1>`;
 
-  // Badge
   const badgeHtml =
     opts.showBadge !== false && opts.badgeText
-      ? `<span style="display:inline-block;background-color:#fef3c7;color:#d97706;font-weight:600;font-size:12px;padding:4px 12px;border-radius:9999px;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">${opts.badgeText}</span>`
+      ? `<span style="display:inline-block;background-color:#fef3c7;color:#d97706;font-weight:600;font-size:12px;padding:4px 12px;border-radius:9999px;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">${escapeHtml(opts.badgeText)}</span>`
       : '';
 
-  // Headline & Body
-  const headline = opts.headline || "It's finally here!";
-  const bodyText = (opts.body || '').replace(/\n/g, '<br/>');
+  const headline = escapeHtml(opts.headline || "It's finally here!");
+  const bodyText = escapeHtml(opts.body || '').replace(/\n/g, '<br/>');
 
-  // Product Card
   let productCardHtml = '';
   if (opts.showProductImage && opts.layout !== 'Minimal') {
-    const prodImg = opts.productImage
-      ? `<img src="${opts.productImage}" alt="${opts.productName || 'Product'}" style="width:100%;max-width:300px;height:auto;border-radius:6px;margin-bottom:14px;object-fit:cover;" />`
+    const prodImg = productImage
+      ? `<img src="${escapeHtml(productImage)}" alt="${escapeHtml(opts.productName || 'Product')}" style="width:100%;max-width:300px;height:auto;border-radius:6px;margin-bottom:14px;object-fit:cover;" />`
       : `<div style="width:100%;max-width:300px;height:140px;background:#e5e7eb;border-radius:6px;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;color:#6b7280;font-weight:600;font-size:13px;">Product Photo</div>`;
-    const prodTitle = opts.productName || 'Featured Restock Item';
-    const prodPrice = opts.productPrice || '$140.00';
+    const prodTitle = escapeHtml(opts.productName || 'Featured Restock Item');
+    const prodPrice = escapeHtml(opts.productPrice || '$140.00');
     const quoteHtml = opts.reviewQuote
-      ? `<p style="font-style:italic;font-size:13px;color:#6b7280;margin:6px 0 0 0;">${opts.reviewQuote}</p>`
+      ? `<p style="font-style:italic;font-size:13px;color:#6b7280;margin:6px 0 0 0;">${escapeHtml(opts.reviewQuote)}</p>`
       : '';
 
     productCardHtml = `
@@ -96,45 +102,47 @@ export function buildEmailHtml(opts: {
       </div>`;
   }
 
-  // CTA Button
-  const buttonUrl = opts.buttonUrl || '#';
-  const buttonLabel = opts.buttonLabel || 'Shop Now Before It Sells Out';
-  const buttonHtml = `
+  const buttonLabel = escapeHtml(opts.buttonLabel || 'Shop Now Before It Sells Out');
+  const buttonHtml = buttonUrl
+    ? `
     <div style="margin-bottom:24px;">
-      <a href="${buttonUrl}" style="display:inline-block;background-color:${brandColor};color:#ffffff !important;font-weight:600;font-size:15px;text-decoration:none;padding:14px 28px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.08);">${buttonLabel}</a>
-    </div>`;
+      <a href="${escapeHtml(buttonUrl)}" style="display:inline-block;background-color:${brandColor};color:#ffffff !important;font-weight:600;font-size:15px;text-decoration:none;padding:14px 28px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.08);">${buttonLabel}</a>
+    </div>`
+    : '';
 
-  // Features List
   let featuresHtml = '';
   if (opts.showFeatures && opts.featuresText && opts.layout !== 'Minimal') {
     const listItems = opts.featuresText
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((line) => `<li style="margin-bottom:6px;">${line}</li>`)
+      .map((line) => `<li style="margin-bottom:6px;">${escapeHtml(line)}</li>`)
       .join('');
     featuresHtml = `
       <div style="text-align:left;background-color:#f9fafb;border:1px solid #f1f5f9;padding:16px 20px;border-radius:6px;margin-bottom:24px;">
-        <strong style="color:#111827;font-size:14px;">${opts.featuresTitle || "Why you'll love it:"}</strong>
+        <strong style="color:#111827;font-size:14px;">${escapeHtml(opts.featuresTitle || "Why you'll love it:")}</strong>
         <ul style="margin:8px 0 0 0;padding-left:20px;color:#4b5563;font-size:14px;">
           ${listItems}
         </ul>
       </div>`;
   }
 
-  // Closing & Signoff
   let closingHtml = '';
   if (opts.closingText || opts.signoffText) {
     closingHtml = `
       <p style="font-size:14.5px;line-height:1.6;color:#4b5563;margin:0 0 24px 0;">
-        ${opts.closingText ? `${opts.closingText}<br/>` : ''}
-        ${opts.signoffText ? `<strong style="color:#111827;">${opts.signoffText}</strong>` : ''}
+        ${opts.closingText ? `${escapeHtml(opts.closingText)}<br/>` : ''}
+        ${opts.signoffText ? `<strong style="color:#111827;">${escapeHtml(opts.signoffText)}</strong>` : ''}
       </p>`;
   }
 
-  // Footer
-  const footerDisclaimer =
-    opts.footerText || 'You received this email because you signed up for alerts.';
+  const footerDisclaimer = escapeHtml(
+    opts.footerText || 'You received this email because you signed up for alerts.',
+  );
+  const wa = String(opts.supportWhatsapp || '').replace(/[^\d+]/g, '');
+  const waFooter = wa
+    ? ` &bull; <a href="https://wa.me/${wa.replace('+', '')}" style="color:${secondaryColor};text-decoration:underline;">WhatsApp Support</a>`
+    : '';
 
   const isCentered = opts.layout !== 'Classic';
   const contentAlign = isCentered ? 'center' : 'left';
@@ -149,48 +157,31 @@ export function buildEmailHtml(opts: {
 <body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#333333;">
   ${preheaderHtml}
   <div style="max-width:600px;margin:20px auto;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 4px 10px rgba(0,0,0,0.05);">
-    <!-- Header -->
     <div style="padding:24px;text-align:center;background-color:${headerBg};border-bottom:${headerBorder};">
       ${headerContent}
     </div>
-
-    <!-- Main Content -->
     <div style="padding:32px 24px;text-align:${contentAlign};">
       ${badgeHtml}
       <h2 style="font-size:24px;font-weight:800;margin:0 0 12px 0;color:#111827;line-height:1.3;">${headline}</h2>
       <p style="font-size:15px;line-height:1.6;color:#4b5563;margin:0 0 24px 0;">
         ${bodyText}
       </p>
-
       ${productCardHtml}
       ${buttonHtml}
       ${featuresHtml}
       ${closingHtml}
     </div>
-
-    <!-- Footer -->
     <div style="background-color:#f9fafb;padding:20px;text-align:center;font-size:12px;color:#9ca3af;border-top:1px solid #e5e7eb;">
       <p style="margin:0 0 8px 0;">${footerDisclaimer}</p>
       <p style="margin:0;">
-        <a href="#" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a> &bull;
-        <a href="#" style="color:#6b7280;text-decoration:underline;">Manage Preferences</a> &bull;
-        <a href="#" style="color:#6b7280;text-decoration:underline;">View in Browser</a>
+        <a href="#" style="color:${secondaryColor};text-decoration:underline;">Unsubscribe</a> &bull;
+        <a href="#" style="color:${secondaryColor};text-decoration:underline;">Manage Preferences</a> &bull;
+        <a href="#" style="color:${secondaryColor};text-decoration:underline;">View in Browser</a>${waFooter}
       </p>
     </div>
   </div>
 </body>
 </html>`;
-}
-
-async function getResendApiKey(): Promise<string | undefined> {
-  try {
-    const { secrets } = await import('@wix/secrets');
-    const elevated = auth.elevate(secrets.getSecretValue);
-    const result = await elevated('RESEND_API_KEY');
-    return (result as { value?: string })?.value || (result as unknown as string);
-  } catch {
-    return process.env.RESEND_API_KEY as string | undefined;
-  }
 }
 
 export async function countAlertsUsed(days = 30): Promise<number> {
@@ -199,9 +190,9 @@ export async function countAlertsUsed(days = 30): Promise<number> {
   const result = await query(COLLECTIONS.alerts)
     .eq('status', 'sent')
     .ge('sentAt', since)
-    .limit(1000)
-    .find();
-  return result.items.length;
+    .limit(1)
+    .find({ returnTotalCount: true });
+  return result.totalCount ?? result.items.length;
 }
 
 export async function canSendAlert(config?: SiteConfig): Promise<{ ok: boolean; used: number; remaining: number; quota: number }> {
@@ -223,9 +214,9 @@ export async function countCustomerAlerts(
     .eq('channel', channel)
     .eq('status', 'sent')
     .ge('sentAt', since)
-    .limit(500)
-    .find();
-  return result.items.length;
+    .limit(1)
+    .find({ returnTotalCount: true });
+  return result.totalCount ?? result.items.length;
 }
 
 /** Per-customer throttle based on notificationLimits. */
@@ -314,29 +305,16 @@ export async function sendTransactionalEmail(opts: {
     }
   }
 
-  const apiKey = await getResendApiKey();
-  if (!apiKey) {
-    await logAlert({
-      alertType: opts.alertType,
-      channel: 'email',
-      to: opts.to,
-      status: 'failed',
-      productId: opts.productId,
-      errorMessage: 'RESEND_API_KEY not configured',
-    });
-    return false;
-  }
-
   try {
-    const { Resend } = await import('resend');
-    const resend = new Resend(apiKey);
     const fromName = opts.fromName || 'Smart Alerts';
-    await resend.emails.send({
-      from: `${fromName} <onboarding@resend.dev>`,
+    const replyTo = opts.replyTo || config.sellerEmail || config.support?.supportEmail || undefined;
+    // Native Wix Email Transmissions — async ACCEPTED ≠ inbox delivery.
+    const wix = await sendWixTransactionalEmail({
       to: opts.to,
       subject: opts.subject,
       html: opts.html,
-      replyTo: opts.replyTo || undefined,
+      fromName,
+      replyTo: replyTo || undefined,
     });
     await logAlert({
       alertType: opts.alertType,
@@ -344,6 +322,9 @@ export async function sendTransactionalEmail(opts: {
       to: opts.to,
       status: 'sent',
       productId: opts.productId,
+      errorMessage: wix.transmissionId
+        ? `wix:${wix.transmissionId} (${wix.status})`
+        : undefined,
     });
     return true;
   } catch (err) {

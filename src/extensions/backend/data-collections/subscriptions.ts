@@ -28,6 +28,20 @@ export default {
     itemRemove: 'PRIVILEGED',
     itemUpdate: 'PRIVILEGED',
   },
-  indexes: [],
+  indexes: [
+    {
+      fields: [
+        { path: 'productId' },
+        { path: 'subscriptionType' },
+        { path: 'state' },
+      ],
+    },
+    {
+      fields: [{ path: 'email' }, { path: 'productId' }, { path: 'state' }],
+    },
+    {
+      fields: [{ path: 'subscriptionType' }, { path: 'state' }, { path: 'cooldownUntil' }],
+    },
+  ],
   initialData: [],
 } satisfies DataCollection;
