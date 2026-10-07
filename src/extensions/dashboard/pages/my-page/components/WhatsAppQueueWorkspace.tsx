@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import {
-  Badge,
   Box,
   Button,
   Card,
+  Checkbox,
   EmptyState,
   Input,
   Table,
@@ -13,7 +13,6 @@ import {
   Chat,
   Package,
   SearchSmall,
-  SettingsSmall,
   Check,
   DeleteSmall,
   Sparkles,
@@ -31,50 +30,60 @@ export interface WhatsAppQueueItem {
 
 export interface WhatsAppQueueWorkspaceProps {
   whatsapp: WhatsAppQueueItem[];
-  config: any;
-  onMarkSent: (id: string) => Promise<void>;
-  onDismiss: (id: string) => Promise<void>;
-  onGoSettings: () => void;
+  onResolve: (ids: string[], action: 'sent' | 'dismiss') => Promise<void>;
+  search: string;
+  onSearchChange: (value: string) => void;
 }
 
 const FONT_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 
 export function WhatsAppQueueWorkspace({
   whatsapp,
-  config,
-  onMarkSent,
-  onDismiss,
-  onGoSettings,
+  onResolve,
+  search,
+  onSearchChange,
 }: WhatsAppQueueWorkspaceProps) {
-  const [search, setSearch] = useState('');
-  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [processingIds, setProcessingIds] = useState<string[]>([]);
 
-  const waSetup = config?.whatsappSetup || {};
-  const isApiMode = waSetup.mode === 'api';
+  // Server already filtered by q; render page as-is.
+  const filteredItems = whatsapp;
 
-  const filteredItems = whatsapp.filter((item) => {
-    if (!search) return true;
-    const term = search.toLowerCase();
-    return (
-      (item.phone || '').toLowerCase().includes(term) ||
-      (item.productName || '').toLowerCase().includes(term) ||
-      (item.productId || '').toLowerCase().includes(term)
-    );
-  });
+  const allFilteredSelected =
+    filteredItems.length > 0 && filteredItems.every((item) => selected.includes(item._id));
 
-  const handleAction = async (action: 'sent' | 'dismiss', id: string) => {
-    setProcessingId(id);
-    try {
-      if (action === 'sent') await onMarkSent(id);
-      else await onDismiss(id);
-    } finally {
-      setProcessingId(null);
+  const toggleAll = () => {
+    if (allFilteredSelected) {
+      const filteredIds = new Set(filteredItems.map((i) => i._id));
+      setSelected((prev) => prev.filter((id) => !filteredIds.has(id)));
+    } else {
+      setSelected((prev) => [
+        ...new Set([...prev, ...filteredItems.map((i) => i._id)]),
+      ]);
     }
   };
 
+  const toggleOne = (id: string) => {
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
+
+  const runResolve = async (ids: string[], action: 'sent' | 'dismiss') => {
+    if (!ids.length) return;
+    setProcessingIds(ids);
+    try {
+      await onResolve(ids, action);
+      setSelected((prev) => prev.filter((id) => !ids.includes(id)));
+    } finally {
+      setProcessingIds([]);
+    }
+  };
+
+  const busyAny = processingIds.length > 0;
+
   return (
     <Box direction="vertical" gap="SP4">
-      {/* 1. WhatsApp Explanatory Attention Banner */}
       <div
         style={{
           background: 'linear-gradient(135deg, #F0FDF4 0%, #ECFDF5 100%)',
@@ -102,36 +111,9 @@ export function WhatsAppQueueWorkspace({
             </Text>
           </Box>
         </Box>
-        <button
-          type="button"
-          onClick={onGoSettings}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '8px 16px',
-            backgroundColor: '#FFFFFF',
-            border: '1px solid #A7F3D0',
-            borderRadius: '8px',
-            color: '#065F46',
-            fontSize: '12.5px',
-            fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)',
-            transition: 'all 0.15s ease',
-            whiteSpace: 'nowrap',
-            flexShrink: 0,
-            fontFamily: FONT_SANS,
-          }}
-        >
-          <SettingsSmall size="15" />
-          <span>Configure WhatsApp</span>
-        </button>
       </div>
 
-      {/* 2. Top Elevated Metric Cards */}
       <Box gap="SP3" style={{ flexWrap: 'wrap' }}>
-        {/* Metric 1: Pending Queue */}
         <div
           style={{
             flex: 1,
@@ -159,7 +141,6 @@ export function WhatsAppQueueWorkspace({
           </div>
         </div>
 
-        {/* Metric 2: Delivery Mode */}
         <div
           style={{
             flex: 1,
@@ -179,7 +160,7 @@ export function WhatsAppQueueWorkspace({
           </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: FONT_SANS }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1 }}>
-              {isApiMode ? 'API Mode' : '1-Click wa.me'}
+              1-Click wa.me
             </span>
             <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748B' }}>
               Dispatch Channel
@@ -187,7 +168,6 @@ export function WhatsAppQueueWorkspace({
           </div>
         </div>
 
-        {/* Metric 3: Active Catalog Watches */}
         <div
           style={{
             flex: 1,
@@ -216,17 +196,14 @@ export function WhatsAppQueueWorkspace({
         </div>
       </Box>
 
-      {/* 3. Main Unified Queue Card */}
       <Card>
         <Card.Header
           title={`WhatsApp Queue Directory (${filteredItems.length})`}
           subtitle="Customer waitlist records awaiting restock notification dispatch"
         />
         <Card.Divider />
-
         <Card.Content>
           <Box direction="vertical" gap="SP4">
-            {/* Sleek Modern Toolbar */}
             <Box
               width="100%"
               verticalAlign="middle"
@@ -234,7 +211,6 @@ export function WhatsAppQueueWorkspace({
               gap="SP3"
               style={{ flexWrap: 'wrap' }}
             >
-              {/* Segmented Pill Toggle in Brand Blue */}
               <div
                 style={{
                   display: 'inline-flex',
@@ -251,11 +227,11 @@ export function WhatsAppQueueWorkspace({
                     gap: '6px',
                     padding: '6px 14px',
                     borderRadius: '8px',
-                    backgroundColor: '#116DFF',
-                    color: '#FFFFFF',
+                    backgroundColor: '#EFF6FF',
+                    color: '#2563EB',
+                    border: '1px solid #BFDBFE',
                     fontWeight: 600,
                     fontSize: '12.5px',
-                    boxShadow: '0 2px 8px rgba(17, 109, 255, 0.35)',
                     fontFamily: FONT_SANS,
                   }}
                 >
@@ -264,21 +240,73 @@ export function WhatsAppQueueWorkspace({
                 </div>
               </div>
 
-              {/* Search Bar */}
               <Box style={{ width: '250px' }}>
                 <Input
                   size="small"
                   prefix={<SearchSmall />}
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => onSearchChange(e.target.value)}
                   placeholder="Search phone or product..."
                   clearButton
-                  onClear={() => setSearch('')}
+                  onClear={() => onSearchChange('')}
                 />
               </Box>
             </Box>
 
-            {/* Table or Empty State with Overflow Protection */}
+            {selected.length > 0 ? (
+              <div
+                style={{
+                  background: 'linear-gradient(135deg, #1E40AF 0%, #0F172A 100%)',
+                  borderRadius: '10px',
+                  padding: '10px 16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  color: '#FFFFFF',
+                  boxShadow: '0 4px 14px rgba(30, 64, 175, 0.25)',
+                  gap: '12px',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <Box verticalAlign="middle" gap="SP2">
+                  <span
+                    style={{
+                      backgroundColor: '#3B82F6',
+                      color: '#FFFFFF',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                    }}
+                  >
+                    {selected.length}
+                  </span>
+                  <span style={{ fontSize: '13px', fontWeight: 500 }}>
+                    chat{selected.length > 1 ? 's' : ''} selected
+                  </span>
+                </Box>
+                <Box verticalAlign="middle" gap="SP2">
+                  <Button
+                    size="small"
+                    disabled={busyAny}
+                    prefixIcon={<Check />}
+                    onClick={() => runResolve(selected, 'sent')}
+                  >
+                    Mark Sent
+                  </Button>
+                  <Button
+                    size="small"
+                    skin="destructive"
+                    disabled={busyAny}
+                    prefixIcon={<DeleteSmall />}
+                    onClick={() => runResolve(selected, 'dismiss')}
+                  >
+                    Dismiss
+                  </Button>
+                </Box>
+              </div>
+            ) : null}
+
             {filteredItems.length === 0 ? (
               <EmptyState
                 title={search ? 'No matching customer chats found' : 'WhatsApp queue is clear'}
@@ -291,31 +319,36 @@ export function WhatsAppQueueWorkspace({
               />
             ) : (
               <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                <div style={{ minWidth: '760px' }}>
+                <div style={{ minWidth: '820px' }}>
                   <Table
                     data={filteredItems}
                     columns={[
                       {
+                        title: (
+                          <Checkbox
+                            checked={allFilteredSelected}
+                            indeterminate={
+                              selected.length > 0 && !allFilteredSelected
+                            }
+                            onChange={toggleAll}
+                          />
+                        ),
+                        width: '48px',
+                        render: (row: WhatsAppQueueItem) => (
+                          <Checkbox
+                            checked={selected.includes(row._id)}
+                            onChange={() => toggleOne(row._id)}
+                          />
+                        ),
+                      },
+                      {
                         title: 'Customer Phone',
-                        width: '24%',
+                        width: '22%',
                         render: (row: WhatsAppQueueItem) => (
                           <Box verticalAlign="middle" gap="SP2">
-                            <div
-                              style={{
-                                width: '38px',
-                                height: '38px',
-                                borderRadius: '10px',
-                                background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)',
-                                color: '#FFFFFF',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                                boxShadow: '0 2px 6px rgba(37, 211, 102, 0.25)',
-                              }}
-                            >
+                            <MonoIconBadge tone="green" size={38} radius={10}>
                               <Chat size="18" />
-                            </div>
+                            </MonoIconBadge>
                             <Box direction="vertical" gap="2px" style={{ minWidth: 0 }}>
                               <span
                                 style={{
@@ -344,7 +377,7 @@ export function WhatsAppQueueWorkspace({
                       },
                       {
                         title: 'Requested Product',
-                        width: '26%',
+                        width: '24%',
                         render: (row: WhatsAppQueueItem) => (
                           <Box verticalAlign="middle" gap="SP2">
                             <MonoIconBadge tone="blue" size={34} radius={8}>
@@ -384,25 +417,25 @@ export function WhatsAppQueueWorkspace({
                       },
                       {
                         title: '1-Click Dispatch',
-                        width: '24%',
+                        width: '22%',
                         render: (row: WhatsAppQueueItem) => (
                           <button
                             type="button"
-                            onClick={() => window.open(row.waMeUrl, '_blank', 'noopener,noreferrer')}
+                            onClick={() =>
+                              window.open(row.waMeUrl, '_blank', 'noopener,noreferrer')
+                            }
                             style={{
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '6px',
                               padding: '7px 14px',
-                              background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)',
-                              color: '#FFFFFF',
-                              border: 'none',
+                              background: '#ECFDF5',
+                              color: '#15803D',
+                              border: '1px solid #A7F3D0',
                               borderRadius: '8px',
                               fontSize: '12px',
                               fontWeight: 600,
                               cursor: 'pointer',
-                              boxShadow: '0 2px 6px rgba(37, 211, 102, 0.3)',
-                              transition: 'all 0.15s ease',
                               whiteSpace: 'nowrap',
                               fontFamily: FONT_SANS,
                             }}
@@ -414,15 +447,15 @@ export function WhatsAppQueueWorkspace({
                       },
                       {
                         title: 'Resolve',
-                        width: '26%',
+                        width: '24%',
                         render: (row: WhatsAppQueueItem) => {
-                          const busy = processingId === row._id;
+                          const busy = processingIds.includes(row._id);
                           return (
                             <Box verticalAlign="middle" gap="SP2">
                               <button
                                 type="button"
-                                disabled={busy}
-                                onClick={() => handleAction('sent', row._id)}
+                                disabled={busy || busyAny}
+                                onClick={() => runResolve([row._id], 'sent')}
                                 style={{
                                   display: 'inline-flex',
                                   alignItems: 'center',
@@ -434,12 +467,9 @@ export function WhatsAppQueueWorkspace({
                                   color: '#15803D',
                                   fontSize: '12px',
                                   fontWeight: 600,
-                                  cursor: busy ? 'not-allowed' : 'pointer',
-                                  transition: 'all 0.15s ease',
+                                  cursor: busy || busyAny ? 'not-allowed' : 'pointer',
                                   whiteSpace: 'nowrap',
-                                  flexShrink: 0,
                                   fontFamily: FONT_SANS,
-                                  boxShadow: '0 1px 2px rgba(21, 128, 61, 0.08)',
                                 }}
                               >
                                 <Check size="13" />
@@ -447,8 +477,8 @@ export function WhatsAppQueueWorkspace({
                               </button>
                               <button
                                 type="button"
-                                disabled={busy}
-                                onClick={() => handleAction('dismiss', row._id)}
+                                disabled={busy || busyAny}
+                                onClick={() => runResolve([row._id], 'dismiss')}
                                 title="Dismiss from queue"
                                 style={{
                                   display: 'inline-flex',
@@ -461,19 +491,9 @@ export function WhatsAppQueueWorkspace({
                                   color: '#94A3B8',
                                   fontSize: '12px',
                                   fontWeight: 500,
-                                  cursor: busy ? 'not-allowed' : 'pointer',
-                                  transition: 'all 0.15s ease',
+                                  cursor: busy || busyAny ? 'not-allowed' : 'pointer',
                                   whiteSpace: 'nowrap',
-                                  flexShrink: 0,
                                   fontFamily: FONT_SANS,
-                                }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.color = '#EF4444';
-                                  e.currentTarget.style.backgroundColor = '#FEF2F2';
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.color = '#94A3B8';
-                                  e.currentTarget.style.backgroundColor = 'transparent';
                                 }}
                               >
                                 <DeleteSmall size="14" />

@@ -8,8 +8,6 @@ export const SITE_DEFAULT_MODULES: Record<string, boolean> = {
   manualWhatsapp: true,
   sellerOutOfStock: true,
   sellerLowStock: true,
-  sellerNewOrder: true,
-  digest: false,
   stockCounter: true,
   restockCountdown: false,
 };

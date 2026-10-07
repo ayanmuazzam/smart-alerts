@@ -49,6 +49,21 @@ export async function createSubscription(input: SubscribeInput) {
     .find();
 
   if (existing.items[0]) {
+    // Keep waiting row, but refresh watchedPrice when shopper re-subscribes
+    // so the baseline matches the price they saw on the PDP.
+    if (
+      input.watchedPrice != null &&
+      Number(existing.items[0].watchedPrice || 0) !== Number(input.watchedPrice)
+    ) {
+      const update = auth.elevate(items.update);
+      return update(COLLECTIONS.subscriptions, {
+        ...existing.items[0],
+        watchedPrice: Number(input.watchedPrice),
+        productName: input.productName || existing.items[0].productName,
+        productUrl: input.productUrl || existing.items[0].productUrl,
+        productImage: input.productImage || existing.items[0].productImage,
+      });
+    }
     return existing.items[0];
   }
 
@@ -88,6 +103,7 @@ export async function findWaitingByProduct(productId: string, subscriptionType: 
           'productUrl',
           'productImage',
           'subscriptionType',
+          'watchedPrice',
           'state',
         )
         .skip(skip)
@@ -117,7 +133,7 @@ export async function cancelWaitingByProduct(productId: string) {
   return subs.length;
 }
 
-export async function markNotified(id: string, cooldownUntil?: Date) {
+export async function markNotified(id: string) {
   const get = auth.elevate(items.get);
   const item = await get(COLLECTIONS.subscriptions, id);
   if (!item) return;
@@ -126,32 +142,43 @@ export async function markNotified(id: string, cooldownUntil?: Date) {
     ...item,
     state: 'notified',
     lastNotifiedAt: new Date(),
-    cooldownUntil: cooldownUntil || null,
+    cooldownUntil: null,
   });
 }
 
-export async function rearmPriceDropWatches() {
-  const now = new Date();
-  const query = auth.elevate(items.query);
+/** After a price-drop alert, keep watching from the new price (no cron cooldown). */
+export async function resetPriceDropWatch(id: string, newWatchedPrice: number) {
+  const get = auth.elevate(items.get);
+  const item = await get(COLLECTIONS.subscriptions, id);
+  if (!item) return;
   const update = auth.elevate(items.update);
-  const due = await queryAllPages(
-    (limit, skip) =>
-      query(COLLECTIONS.subscriptions)
-        .eq('subscriptionType', 'price_drop')
-        .eq('state', 'notified')
-        .le('cooldownUntil', now)
-        .fields('_id', 'state', 'cooldownUntil', 'subscriptionType')
-        .skip(skip)
-        .limit(limit)
-        .find(),
-    100,
-  );
-  let count = 0;
-  for (const item of due) {
-    await update(COLLECTIONS.subscriptions, { ...item, state: 'waiting', cooldownUntil: null });
-    count += 1;
+  await update(COLLECTIONS.subscriptions, {
+    ...item,
+    state: 'waiting',
+    watchedPrice: newWatchedPrice,
+    lastNotifiedAt: new Date(),
+    cooldownUntil: null,
+  });
+}
+
+/** Pre-filled wa.me text from store → subscribed shopper (never customer→store voice). */
+export function buildStoreWhatsappMessage(opts: {
+  productName?: string;
+  subscriptionType?: string;
+}): string {
+  const product = String(opts.productName || 'this product').trim() || 'this product';
+  if (opts.subscriptionType === 'price_drop') {
+    return (
+      `Hi! This is a quick update from our store about ${product}. ` +
+      `You asked us to watch the price — we're reaching out with news. ` +
+      `Reply anytime if you have questions.`
+    );
   }
-  return count;
+  return (
+    `Hi! Great news — ${product} is back in stock. ` +
+    `You asked us to notify you when it returned. ` +
+    `Reply if you'd like help placing an order.`
+  );
 }
 
 export async function addWhatsappQueue(entry: {
@@ -160,11 +187,16 @@ export async function addWhatsappQueue(entry: {
   productName?: string;
   email?: string;
   message?: string;
+  subscriptionType?: string;
 }) {
   const phone = entry.phone.replace(/[^\d+]/g, '');
-  const text = encodeURIComponent(
-    entry.message || `Hi! I'm interested in ${entry.productName || 'your product'}.`,
-  );
+  const message =
+    entry.message ||
+    buildStoreWhatsappMessage({
+      productName: entry.productName,
+      subscriptionType: entry.subscriptionType,
+    });
+  const text = encodeURIComponent(message);
   const waMeUrl = `https://wa.me/${phone.replace('+', '')}?text=${text}`;
   const insert = auth.elevate(items.insert);
   return insert(COLLECTIONS.whatsappQueue, {
@@ -173,7 +205,7 @@ export async function addWhatsappQueue(entry: {
     productId: entry.productId,
     productName: entry.productName || '',
     email: entry.email || '',
-    message: entry.message || '',
+    message,
     waMeUrl,
     status: 'pending',
   });

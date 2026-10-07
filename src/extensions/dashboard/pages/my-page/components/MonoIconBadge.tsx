@@ -14,90 +14,69 @@ export type MonoIconTone =
   | 'violet'
   | 'cyan';
 
+/**
+ * Pastel squircle + monoline stroke icon.
+ * Style: outlined / stroke-based line art on soft badge — no filled tiles, no 3D, no heavy shadows.
+ */
 const TONES: Record<
   MonoIconTone,
-  { background: string; shadow: string }
+  { background: string; color: string; border: string }
 > = {
-  blue: {
-    background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
-    shadow: '0 4px 10px rgba(59, 130, 246, 0.28)',
-  },
-  indigo: {
-    background: 'linear-gradient(135deg, #6366F1 0%, #4338CA 100%)',
-    shadow: '0 4px 10px rgba(99, 102, 241, 0.28)',
-  },
-  green: {
-    background: 'linear-gradient(135deg, #22C55E 0%, #15803D 100%)',
-    shadow: '0 4px 10px rgba(34, 197, 94, 0.28)',
-  },
-  emerald: {
-    background: 'linear-gradient(135deg, #10B981 0%, #047857 100%)',
-    shadow: '0 4px 10px rgba(16, 185, 129, 0.28)',
-  },
-  amber: {
-    background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
-    shadow: '0 4px 10px rgba(245, 158, 11, 0.28)',
-  },
-  orange: {
-    background: 'linear-gradient(135deg, #F97316 0%, #C2410C 100%)',
-    shadow: '0 4px 10px rgba(249, 115, 22, 0.28)',
-  },
-  rose: {
-    background: 'linear-gradient(135deg, #F43F5E 0%, #BE123C 100%)',
-    shadow: '0 4px 10px rgba(244, 63, 94, 0.28)',
-  },
-  slate: {
-    background: 'linear-gradient(135deg, #64748B 0%, #334155 100%)',
-    shadow: '0 4px 10px rgba(51, 65, 85, 0.28)',
-  },
-  violet: {
-    background: 'linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%)',
-    shadow: '0 4px 10px rgba(139, 92, 246, 0.28)',
-  },
-  cyan: {
-    background: 'linear-gradient(135deg, #06B6D4 0%, #0E7490 100%)',
-    shadow: '0 4px 10px rgba(6, 182, 212, 0.28)',
-  },
+  blue: { background: '#EFF6FF', color: '#2563EB', border: '#DBEAFE' },
+  indigo: { background: '#EEF2FF', color: '#4F46E5', border: '#E0E7FF' },
+  green: { background: '#F0FDF4', color: '#16A34A', border: '#BBF7D0' },
+  emerald: { background: '#ECFDF5', color: '#059669', border: '#A7F3D0' },
+  amber: { background: '#FFFBEB', color: '#D97706', border: '#FDE68A' },
+  orange: { background: '#FFF7ED', color: '#EA580C', border: '#FED7AA' },
+  rose: { background: '#FFF1F2', color: '#E11D48', border: '#FECDD3' },
+  slate: { background: '#F8FAFC', color: '#475569', border: '#E2E8F0' },
+  violet: { background: '#F5F3FF', color: '#7C3AED', border: '#DDD6FE' },
+  cyan: { background: '#ECFEFF', color: '#0891B2', border: '#A5F3FC' },
 };
 
 export type MonoIconBadgeProps = {
   children: React.ReactNode;
   tone?: MonoIconTone;
   size?: number;
+  /** Squircle radius; defaults to ~28% of size for soft rounded-square look. */
   radius?: number;
   muted?: boolean;
   title?: string;
 };
 
 /**
- * Minimalist monochromatic icon tile: solid/gradient background + white glyph.
- * Use for section headers, KPI cards, and list row avatars across the dashboard.
+ * Soft pastel squircle container for outlined / monoline Wix icons.
+ * Icons inherit `currentColor` (stroke tone). Prefer @wix/wix-ui-icons-common line icons.
  */
 export function MonoIconBadge({
   children,
   tone = 'blue',
   size = 40,
-  radius = 10,
+  radius,
   muted = false,
   title,
 }: MonoIconBadgeProps) {
   const t = TONES[tone] || TONES.blue;
+  const squircleRadius = radius ?? Math.round(size * 0.28);
   return (
     <div
       title={title}
       style={{
         width: size,
         height: size,
-        borderRadius: radius,
+        borderRadius: squircleRadius,
         background: t.background,
-        color: '#FFFFFF',
+        color: t.color,
+        border: `1px solid ${t.border}`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        boxShadow: muted ? 'none' : t.shadow,
+        boxShadow: 'none',
         flexShrink: 0,
-        opacity: muted ? 0.65 : 1,
+        opacity: muted ? 0.55 : 1,
         fontFamily: FONT_SANS,
+        // Encourage stroke-like rendering of vector icons
+        lineHeight: 0,
       }}
     >
       {children}
@@ -105,10 +84,13 @@ export function MonoIconBadge({
   );
 }
 
-/** Inline monochrome icon color for buttons / text (not tiled). */
+/** Stroke / monoline icon colors for buttons and text (not tiled). */
 export const MONO_ICON = {
   onDark: '#FFFFFF',
-  onLight: '#0F172A',
+  onLight: '#334155',
   muted: '#64748B',
-  accent: '#1D4ED8',
+  accent: '#2563EB',
+  stroke: '#334155',
 } as const;
+
+export const MONO_ICON_TONES = TONES;

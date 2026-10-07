@@ -10,5 +10,15 @@ export default defineConfig({
   integrations: [wix(), react()],
   image: { domains: ["static.wixstatic.com"] },
   security: { checkOrigin: false },
-  devToolbar: { enabled: false }
+  devToolbar: { enabled: false },
+  // Vite 6 defaults CORS to localhost-only; storefront preview is on
+  // *.wix-development-sites.org and must be allowed during `wix dev`.
+  vite: {
+    server: {
+      cors: {
+        origin: true,
+        allowedHeaders: ['Authorization', 'Content-Type'],
+      },
+    },
+  },
 });

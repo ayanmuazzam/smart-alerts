@@ -22,6 +22,8 @@ import {
   Sparkles,
   DismissSmall,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge } from './MonoIconBadge';
+import { storedToDatetimeLocal } from '../../../../../lib/smart-alerts/datetime-local';
 
 export interface TrackedProductRow {
   _id?: string;
@@ -30,6 +32,7 @@ export interface TrackedProductRow {
   lastStockStatus?: string;
   lowStockThreshold?: number;
   restockAt?: string | null;
+  trackedSource?: string;
 }
 
 export interface SearchProductRow {
@@ -41,6 +44,7 @@ export interface SearchProductRow {
 export interface InventoryTrackerWorkspaceProps {
   search: string;
   setSearch: (s: string) => void;
+  searching?: boolean;
   onSearchProducts: () => void;
   onLoadOos: () => Promise<void>;
   searchResults: SearchProductRow[];
@@ -50,25 +54,14 @@ export interface InventoryTrackerWorkspaceProps {
   setDraftOverrides: React.Dispatch<
     React.SetStateAction<Record<string, { lowStockThreshold: string; restockAt: string }>>
   >;
+  siteTimeZone?: string;
   onSaveProductOverride: (row: TrackedProductRow) => Promise<void>;
-}
-
-// Format ISO date string to datetime-local input value (YYYY-MM-DDTHH:mm)
-function toDateTimeLocalString(isoDate?: string | null): string {
-  if (!isoDate) return '';
-  try {
-    const d = new Date(isoDate);
-    if (isNaN(d.getTime())) return '';
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } catch {
-    return '';
-  }
 }
 
 export function InventoryTrackerWorkspace({
   search,
   setSearch,
+  searching = false,
   onSearchProducts,
   onLoadOos,
   searchResults,
@@ -76,13 +69,14 @@ export function InventoryTrackerWorkspace({
   tracked,
   draftOverrides,
   setDraftOverrides,
+  siteTimeZone = 'UTC',
   onSaveProductOverride,
 }: InventoryTrackerWorkspaceProps) {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [justSavedKey, setJustSavedKey] = useState<string | null>(null);
   const [trackingId, setTrackingId] = useState<string | null>(null);
   const [isLoadingOos, setIsLoadingOos] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<'all' | 'oos' | 'scheduled'>('all');
+  const [activeFilter, setActiveFilter] = useState<'manual' | 'oos' | 'scheduled'>('manual');
   const [dismissSearchResults, setDismissSearchResults] = useState(false);
 
   const handleLoadOos = async () => {
@@ -98,6 +92,8 @@ export function InventoryTrackerWorkspace({
     setTrackingId(row.id);
     try {
       await onTrackProduct(row);
+      setActiveFilter('manual');
+      setDismissSearchResults(true);
     } finally {
       setTrackingId(null);
     }
@@ -122,10 +118,14 @@ export function InventoryTrackerWorkspace({
     return s.includes('out') || s === '0' || s.includes('empty');
   };
 
+  const isManualTracked = (row: TrackedProductRow) => row.trackedSource === 'manual';
+  const manualTracked = tracked.filter(isManualTracked);
+  const trackedCount = manualTracked.length;
   const outOfStockCount = tracked.filter((t) => isOos(t.lastStockStatus)).length;
   const scheduledCount = tracked.filter((t) => Boolean(t.restockAt)).length;
 
   const filteredTracked = tracked.filter((item) => {
+    if (activeFilter === 'manual') return isManualTracked(item);
     if (activeFilter === 'oos') return isOos(item.lastStockStatus);
     if (activeFilter === 'scheduled') return Boolean(item.restockAt);
     return true;
@@ -150,22 +150,9 @@ export function InventoryTrackerWorkspace({
           }}
         >
           <Box verticalAlign="middle" gap="SP3">
-            <div
-              style={{
-                width: '40px',
-                height: '40px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, #E11D48 0%, #BE123C 100%)',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 10px rgba(225, 29, 72, 0.25)',
-                flexShrink: 0,
-              }}
-            >
+            <MonoIconBadge tone="rose" size={40} radius={10}>
               <StatusAlert size="20" />
-            </div>
+            </MonoIconBadge>
             <Box direction="vertical" gap="2px">
               <Text weight="bold" size="medium">
                 Depleted Inventory Requires Attention
@@ -221,33 +208,19 @@ export function InventoryTrackerWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(59, 130, 246, 0.25)',
-              flexShrink: 0,
-            }}
-          >
-            <Package size="20" />
-          </div>
+          <MonoIconBadge tone="rose" size={44} radius={10}>
+              <StatusAlert size="20" />
+            </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-              {tracked.length}
+              {outOfStockCount}
             </span>
             <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748B', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-              Tracked Products
+              Out of Stock
             </span>
           </div>
         </div>
 
-        {/* Metric 2: Out of Stock */}
         <div
           style={{
             flex: 1,
@@ -262,28 +235,15 @@ export function InventoryTrackerWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #EF4444 0%, #B91C1C 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(239, 68, 68, 0.25)',
-              flexShrink: 0,
-            }}
-          >
-            <StatusAlert size="20" />
-          </div>
+          <MonoIconBadge tone="blue" size={44} radius={10}>
+              <Package size="20" />
+            </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-              {outOfStockCount}
+              {outOfStockCount > 0 ? 'Attention' : 'Clear'}
             </span>
             <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748B', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-              Out of Stock
+              Inventory Health
             </span>
           </div>
         </div>
@@ -303,22 +263,9 @@ export function InventoryTrackerWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(139, 92, 246, 0.25)',
-              flexShrink: 0,
-            }}
-          >
-            <Timer size="20" />
-          </div>
+          <MonoIconBadge tone="violet" size={44} radius={10}>
+              <Timer size="20" />
+            </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
               {scheduledCount}
@@ -333,20 +280,18 @@ export function InventoryTrackerWorkspace({
       {/* 3. Main Data Card */}
       <Card>
         <Card.Header
-          title="Inventory Tracking Directory"
-          subtitle="Configure low-stock alert thresholds and schedule restock countdown timers"
+          title="Inventory Tracker"
+          subtitle="Search the catalog and track products to set low-stock thresholds and restock countdowns"
           suffix={
-            outOfStockCount === 0 ? (
-              <Button
-                size="small"
-                priority="secondary"
-                prefixIcon={<Refresh />}
-                onClick={handleLoadOos}
-                disabled={isLoadingOos}
-              >
-                {isLoadingOos ? 'Scanning catalog…' : 'Scan Out-of-Stock'}
-              </Button>
-            ) : null
+            <Button
+              size="small"
+              priority="secondary"
+              prefixIcon={<Refresh />}
+              onClick={handleLoadOos}
+              disabled={isLoadingOos}
+            >
+              {isLoadingOos ? 'Scanning…' : 'Scan Out-of-Stock'}
+            </Button>
           }
         />
         <Card.Divider />
@@ -371,77 +316,52 @@ export function InventoryTrackerWorkspace({
                   gap: '4px',
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => setActiveFilter('all')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 14px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    backgroundColor: activeFilter === 'all' ? '#116DFF' : 'transparent',
-                    color: activeFilter === 'all' ? '#FFFFFF' : '#475569',
-                    fontWeight: 600,
-                    fontSize: '12.5px',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                    boxShadow:
-                      activeFilter === 'all' ? '0 2px 8px rgba(17, 109, 255, 0.35)' : 'none',
-                  }}
-                >
-                  <Package size="15" />
-                  <span>All Items ({tracked.length})</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveFilter('oos')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 14px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    backgroundColor: activeFilter === 'oos' ? '#116DFF' : 'transparent',
-                    color: activeFilter === 'oos' ? '#FFFFFF' : '#475569',
-                    fontWeight: 600,
-                    fontSize: '12.5px',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                    boxShadow:
-                      activeFilter === 'oos' ? '0 2px 8px rgba(17, 109, 255, 0.35)' : 'none',
-                  }}
-                >
-                  <StatusAlert size="15" />
-                  <span>Out of Stock ({outOfStockCount})</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveFilter('scheduled')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 14px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    backgroundColor: activeFilter === 'scheduled' ? '#116DFF' : 'transparent',
-                    color: activeFilter === 'scheduled' ? '#FFFFFF' : '#475569',
-                    fontWeight: 600,
-                    fontSize: '12.5px',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                    boxShadow:
-                      activeFilter === 'scheduled' ? '0 2px 8px rgba(17, 109, 255, 0.35)' : 'none',
-                  }}
-                >
-                  <Timer size="15" />
-                  <span>Restock Timers ({scheduledCount})</span>
-                </button>
+                {(
+                  [
+                    {
+                      key: 'manual' as const,
+                      label: `Tracked Products (${trackedCount})`,
+                      Icon: Package,
+                    },
+                    {
+                      key: 'oos' as const,
+                      label: `Out of Stock (${outOfStockCount})`,
+                      Icon: StatusAlert,
+                    },
+                    {
+                      key: 'scheduled' as const,
+                      label: `Restock Timers (${scheduledCount})`,
+                      Icon: Timer,
+                    },
+                  ] as const
+                ).map(({ key, label, Icon }) => {
+                  const active = activeFilter === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setActiveFilter(key)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 14px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        backgroundColor: active ? '#116DFF' : 'transparent',
+                        color: active ? '#FFFFFF' : '#475569',
+                        fontWeight: 600,
+                        fontSize: '12.5px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                        boxShadow: active ? '0 2px 8px rgba(17, 109, 255, 0.35)' : 'none',
+                      }}
+                    >
+                      <Icon size="15" />
+                      <span>{label}</span>
+                    </button>
+                  );
+                })}
               </div>
 
               {/* Catalog Search Bar */}
@@ -468,18 +388,27 @@ export function InventoryTrackerWorkspace({
                 </Box>
                 <Button
                   size="small"
+                  disabled={searching}
                   onClick={() => {
                     setDismissSearchResults(false);
                     onSearchProducts();
                   }}
                 >
-                  Search
+                  {searching ? 'Searching…' : 'Search'}
                 </Button>
               </Box>
             </Box>
 
+            {searching ? (
+              <Box align="center" padding="24px">
+                <Text size="small" secondary>
+                  Searching catalog…
+                </Text>
+              </Box>
+            ) : null}
+
             {/* Catalog Search Results Section */}
-            {showSearchResults && (
+            {!searching && showSearchResults && (
               <div
                 style={{
                   backgroundColor: '#F8FAFC',
@@ -619,34 +548,36 @@ export function InventoryTrackerWorkspace({
             {filteredTracked.length === 0 ? (
               <EmptyState
                 title={
-                  activeFilter === 'oos'
-                    ? 'No out-of-stock items'
-                    : activeFilter === 'scheduled'
-                      ? 'No restock countdowns scheduled'
-                      : 'No tracked products yet'
+                  activeFilter === 'scheduled'
+                    ? 'No restock countdowns scheduled'
+                    : activeFilter === 'oos'
+                      ? 'No out-of-stock products'
+                      : 'No products tracked yet'
                 }
                 subtitle={
-                  activeFilter === 'oos'
-                    ? 'All tracked products currently have healthy inventory levels.'
-                    : activeFilter === 'scheduled'
-                      ? 'Set an expected restock date on any product to display a live countdown timer.'
-                      : 'Search your store catalog above or click "Scan Out-of-Stock" to monitor items for low stock warnings and restock countdown timers.'
+                  activeFilter === 'scheduled'
+                    ? 'Set an expected restock date on a tracked product to show a countdown on the storefront.'
+                    : activeFilter === 'oos'
+                      ? 'Click “Scan Out-of-Stock” to import current OOS products, or search and track a specific product.'
+                      : 'Search your store catalog and click Track Product to add items here for thresholds and restock timers.'
                 }
                 skin="section"
               >
-                {activeFilter === 'all' && (
+                {activeFilter === 'scheduled' ? null : (
                   <Box gap="SP2" style={{ marginTop: '14px' }}>
+                    {activeFilter === 'oos' ? (
+                      <Button
+                        size="small"
+                        prefixIcon={<Refresh />}
+                        onClick={handleLoadOos}
+                        disabled={isLoadingOos}
+                      >
+                        {isLoadingOos ? 'Scanning…' : 'Scan Out-of-Stock'}
+                      </Button>
+                    ) : null}
                     <Button
                       size="small"
-                      prefixIcon={<Refresh />}
-                      onClick={handleLoadOos}
-                      disabled={isLoadingOos}
-                    >
-                      {isLoadingOos ? 'Scanning…' : 'Scan Out-of-Stock Catalog'}
-                    </Button>
-                    <Button
-                      size="small"
-                      priority="secondary"
+                      priority={activeFilter === 'manual' ? 'primary' : 'secondary'}
                       prefixIcon={<SearchSmall />}
                       onClick={onSearchProducts}
                     >
@@ -753,7 +684,7 @@ export function InventoryTrackerWorkspace({
                           const key = row._id || row.productId;
                           const draft = draftOverrides[key] || {
                             lowStockThreshold: String(row.lowStockThreshold ?? 5),
-                            restockAt: toDateTimeLocalString(row.restockAt),
+                            restockAt: storedToDatetimeLocal(row.restockAt, siteTimeZone),
                           };
                           return (
                             <Box direction="vertical" gap="2px">
@@ -789,7 +720,7 @@ export function InventoryTrackerWorkspace({
                           const key = row._id || row.productId;
                           const draft = draftOverrides[key] || {
                             lowStockThreshold: String(row.lowStockThreshold ?? 5),
-                            restockAt: toDateTimeLocalString(row.restockAt),
+                            restockAt: storedToDatetimeLocal(row.restockAt, siteTimeZone),
                           };
                           const hasDate = Boolean(draft.restockAt);
                           return (
@@ -820,7 +751,7 @@ export function InventoryTrackerWorkspace({
                                 {hasDate ? (
                                   <>
                                     <span style={{ color: '#2563EB', fontWeight: 500 }}>
-                                      Live countdown
+                                      {siteTimeZone}
                                     </span>
                                     <span>•</span>
                                     <button
@@ -863,7 +794,7 @@ export function InventoryTrackerWorkspace({
 
                           const draft = draftOverrides[key];
                           const initialThreshold = String(row.lowStockThreshold ?? 5);
-                          const initialRestockAt = toDateTimeLocalString(row.restockAt);
+                          const initialRestockAt = storedToDatetimeLocal(row.restockAt, siteTimeZone);
                           const isDirty =
                             draft &&
                             (draft.lowStockThreshold !== initialThreshold ||

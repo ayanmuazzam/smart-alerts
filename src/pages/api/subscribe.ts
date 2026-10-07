@@ -2,8 +2,7 @@ import type { APIRoute } from 'astro';
 import { createSubscription, addWhatsappQueue } from '../../lib/smart-alerts/subscriptions';
 import { getOrCreateConfig, isModuleEnabled } from '../../lib/smart-alerts/config';
 import type { SubscriptionType } from '../../lib/smart-alerts/constants';
-import { sendWhatsappViaTwilio } from '../../lib/smart-alerts/whatsapp';
-import { getProductSnapshot } from '../../lib/smart-alerts/products';
+import { getProductSnapshot, upsertProductOverride } from '../../lib/smart-alerts/products';
 import { isValidEmail, isValidE164Phone } from '../../lib/smart-alerts/sanitize';
 
 /** Simple per-isolate sliding window (not durable across workers). */
@@ -77,6 +76,9 @@ export const POST: APIRoute = async ({ request }) => {
       return Response.json({ error: 'Product not found' }, { status: 404 });
     }
 
+    const watchedPrice =
+      body.watchedPrice != null ? Number(body.watchedPrice) : snapshot.price;
+
     const sub = await createSubscription({
       productId,
       variantId: body.variantId || snapshot.variantId,
@@ -87,37 +89,28 @@ export const POST: APIRoute = async ({ request }) => {
       email,
       phone: body.phone,
       consent: Boolean(body.consent),
-      watchedPrice:
-        body.watchedPrice != null ? Number(body.watchedPrice) : snapshot.price,
+      watchedPrice,
     });
 
+    // Seed catalog baseline so the first price drop after subscribe can compare.
+    if (subscriptionType === 'price_drop' && watchedPrice > 0) {
+      await upsertProductOverride({
+        productId,
+        variantId: body.variantId || snapshot.variantId,
+        productName: snapshot.name,
+        lastKnownPrice: watchedPrice,
+        lastStockStatus: snapshot.stockStatus,
+      });
+    }
+
     if (body.phone && isModuleEnabled(config, 'manualWhatsapp')) {
-      const message = `Hi! I'm interested in ${snapshot.name || 'your product'}.`;
-      if (config.whatsappSetup?.mode === 'api') {
-        const sent = await sendWhatsappViaTwilio({
-          to: body.phone,
-          body: message,
-          productId,
-          alertType: 'whatsapp',
-        });
-        if (!sent) {
-          await addWhatsappQueue({
-            phone: body.phone,
-            productId,
-            productName: snapshot.name,
-            email,
-            message,
-          });
-        }
-      } else {
-        await addWhatsappQueue({
-          phone: body.phone,
-          productId,
-          productName: snapshot.name,
-          email,
-          message,
-        });
-      }
+      await addWhatsappQueue({
+        phone: body.phone,
+        productId,
+        productName: snapshot.name,
+        email,
+        subscriptionType,
+      });
     }
 
     return Response.json({

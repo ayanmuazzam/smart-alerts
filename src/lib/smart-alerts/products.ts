@@ -256,6 +256,8 @@ export async function loadOutOfStockProducts(limit = 50) {
   return result.items || [];
 }
 
+export type TrackedSource = 'manual' | 'scan' | 'system';
+
 export async function upsertProductOverride(data: {
   productId: string;
   variantId?: string;
@@ -267,6 +269,7 @@ export async function upsertProductOverride(data: {
   lastStockStatus?: string;
   lastLowStockAlertAt?: Date | string | null;
   tracked?: boolean;
+  trackedSource?: TrackedSource;
 }) {
   const query = auth.elevate(items.query);
   const existing = await query(COLLECTIONS.productOverrides)
@@ -275,23 +278,32 @@ export async function upsertProductOverride(data: {
     .limit(1)
     .find();
 
+  const prev = existing.items[0] as
+    | { tracked?: boolean; trackedSource?: string; [key: string]: unknown }
+    | undefined;
+
   const payload: Record<string, unknown> = {
     title: data.productName || data.productId,
     productId: data.productId,
     variantId: data.variantId || '',
     productName: data.productName || '',
     sku: '',
-    lowStockThreshold: data.lowStockThreshold ?? existing.items[0]?.lowStockThreshold ?? 5,
-    useGlobalThreshold: data.useGlobalThreshold ?? existing.items[0]?.useGlobalThreshold ?? true,
+    lowStockThreshold: data.lowStockThreshold ?? prev?.lowStockThreshold ?? 5,
+    useGlobalThreshold: data.useGlobalThreshold ?? prev?.useGlobalThreshold ?? true,
     restockAt:
       data.restockAt !== undefined
         ? data.restockAt
           ? new Date(data.restockAt)
           : null
-        : existing.items[0]?.restockAt ?? null,
-    lastKnownPrice: data.lastKnownPrice ?? existing.items[0]?.lastKnownPrice ?? 0,
-    lastStockStatus: data.lastStockStatus || existing.items[0]?.lastStockStatus || '',
-    tracked: data.tracked ?? true,
+        : prev?.restockAt ?? null,
+    lastKnownPrice: data.lastKnownPrice ?? prev?.lastKnownPrice ?? 0,
+    lastStockStatus: data.lastStockStatus || prev?.lastStockStatus || '',
+    // Default false so catalog seed / stock events do not flood Inventory Tracker.
+    tracked: data.tracked !== undefined ? data.tracked : (prev?.tracked ?? false),
+    trackedSource:
+      data.trackedSource !== undefined
+        ? data.trackedSource
+        : (prev?.trackedSource ?? 'system'),
   };
   if (data.lastLowStockAlertAt !== undefined) {
     payload.lastLowStockAlertAt = data.lastLowStockAlertAt

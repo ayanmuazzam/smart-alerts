@@ -18,14 +18,15 @@ import {
   type AutomationSub,
   type CustomizationSub,
   type PrimaryTab,
-  type SettingsSub,
 } from './adminApi';
 import { getDefaultEmailTemplate } from '../../../../lib/smart-alerts/constants';
+import { storedToDatetimeLocal } from '../../../../lib/smart-alerts/datetime-local';
 import { DashboardScreen } from './screens/DashboardScreen';
 import { AutomationScreen } from './screens/AutomationScreen';
 import { EmailCustomizationScreen, type TemplateForm } from './screens/EmailCustomizationScreen';
 import { StorefrontCustomizationScreen } from './screens/StorefrontCustomizationScreen';
-import { SettingsScreen } from './screens/SettingsScreen';
+import { LogsAndQuotaScreen } from './screens/LogsAndQuotaScreen';
+import type { AlertChannelFilter } from './components/LogsAndQuotaWorkspace';
 
 /** Former floating "My alerts" corner button — disable on sites that still have it embedded. */
 const CORNER_EMBEDDED_SCRIPT_ID = 'f1428cdb-83d7-4ac1-b13d-91ee44f6d480';
@@ -35,7 +36,7 @@ const PRIMARY_TABS: { id: PrimaryTab; title: string }[] = [
   { id: 'automation', title: 'Automation' },
   { id: 'email', title: 'Email & Branding' },
   { id: 'storefront', title: 'Storefront Widget' },
-  { id: 'settings', title: 'Settings' },
+  { id: 'logs', title: 'Logs & Quota' },
 ];
 
 type ToastItem = {
@@ -109,7 +110,6 @@ function formFromSavedOrDefaults(triggerType: string, existing?: any): TemplateF
 export default function SmartAlertsPage() {
   const [primary, setPrimary] = useState<PrimaryTab>('dashboard');
   const [automationSub, setAutomationSub] = useState<AutomationSub>('rules');
-  const [settingsSub, setSettingsSub] = useState<SettingsSub>('general');
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -123,7 +123,36 @@ export default function SmartAlertsPage() {
   const [listSkip, setListSkip] = useState(0);
   const [listStateFilter, setListStateFilter] = useState('');
   const [selectedSubs, setSelectedSubs] = useState<string[]>([]);
+  const listsCacheRef = useRef<
+    Record<
+      string,
+      {
+        items: any[];
+        totalCount: number;
+        skip: number;
+        stateFilter: string;
+        search: string;
+      }
+    >
+  >({});
+  const listViewRef = useRef({
+    listType: 'back_in_stock',
+    listItems: [] as any[],
+    listTotalCount: 0,
+    listSkip: 0,
+    listStateFilter: '',
+    listSearch: '',
+  });
+  listViewRef.current = {
+    listType,
+    listItems,
+    listTotalCount,
+    listSkip,
+    listStateFilter,
+    listSearch,
+  };
   const [whatsapp, setWhatsapp] = useState<any[]>([]);
+  const [whatsappSearch, setWhatsappSearch] = useState('');
   const [templates, setTemplates] = useState<any[]>([]);
   const [templateForm, setTemplateForm] = useState<TemplateForm>(() => formFromDefaults('back_in_stock'));
   const templateTriggerRef = useRef(templateForm.triggerType);
@@ -131,18 +160,33 @@ export default function SmartAlertsPage() {
   const [tracked, setTracked] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [inventorySearching, setInventorySearching] = useState(false);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [alertsTotalCount, setAlertsTotalCount] = useState(0);
   const [alertsSkip, setAlertsSkip] = useState(0);
+  const [alertSearch, setAlertSearch] = useState('');
+  const [alertChannelFilter, setAlertChannelFilter] = useState<AlertChannelFilter>('all');
   const [quota, setQuota] = useState<any>(null);
   const [selectedAlerts, setSelectedAlerts] = useState<string[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [draftOverrides, setDraftOverrides] = useState<
     Record<string, { lowStockThreshold: string; restockAt: string }>
   >({});
+  const [siteTimeZone, setSiteTimeZone] = useState('UTC');
   const [rulesModule, setRulesModule] = useState<string | null>(null);
   const [isSavingRules, setIsSavingRules] = useState(false);
   const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const alertSearchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const whatsappSearchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipListSearchEffectRef = useRef(false);
+  const inventorySearchRef = useRef(search);
+  inventorySearchRef.current = search;
+  const alertSearchRef = useRef(alertSearch);
+  alertSearchRef.current = alertSearch;
+  const alertChannelFilterRef = useRef(alertChannelFilter);
+  alertChannelFilterRef.current = alertChannelFilter;
+  const whatsappSearchRef = useRef(whatsappSearch);
+  whatsappSearchRef.current = whatsappSearch;
 
   const removeToast = (id: string) => {
     setToasts((list) => list.filter((t) => t.id !== id));
@@ -184,22 +228,83 @@ export default function SmartAlertsPage() {
   const listSearchRef = useRef(listSearch);
   listSearchRef.current = listSearch;
 
-  const loadLists = useCallback(async (qOverride?: string, skipOverride?: number, stateOverride?: string) => {
+  const loadLists = useCallback(async (qOverride?: string, skipOverride?: number, stateOverride?: string, typeOverride?: string) => {
+    const type = typeOverride || listType;
     const q = qOverride !== undefined ? qOverride : listSearchRef.current;
     const skip = skipOverride !== undefined ? skipOverride : listSkip;
     const state = stateOverride !== undefined ? stateOverride : listStateFilter;
     const extra =
-      `&type=${listType}&limit=50&skip=${skip}` +
+      `&type=${type}&limit=50&skip=${skip}` +
       (q ? `&q=${encodeURIComponent(q)}` : '') +
       (state ? `&state=${encodeURIComponent(state)}` : '');
     const data = await adminGet('lists', extra);
-    setListItems(data.items || []);
-    setListTotalCount(data.totalCount ?? (data.items || []).length);
-    setListSkip(data.skip ?? skip);
+    const items = data.items || [];
+    const totalCount = data.totalCount ?? items.length;
+    const nextSkip = data.skip ?? skip;
+    setListItems(items);
+    setListTotalCount(totalCount);
+    setListSkip(nextSkip);
+    listsCacheRef.current[type] = {
+      items,
+      totalCount,
+      skip: nextSkip,
+      stateFilter: state,
+      search: q,
+    };
   }, [listType, listSkip, listStateFilter]);
 
-  const loadWhatsapp = useCallback(async () => {
-    const data = await adminGet('whatsapp', '&limit=50&skip=0');
+  const handleSetListType = (next: string) => {
+    const current = listViewRef.current;
+    if (next === current.listType) return;
+
+    listsCacheRef.current[current.listType] = {
+      items: current.listItems,
+      totalCount: current.listTotalCount,
+      skip: current.listSkip,
+      stateFilter: current.listStateFilter,
+      search: current.listSearch,
+    };
+
+    setSelectedSubs([]);
+    setListType(next);
+
+    const cached = listsCacheRef.current[next];
+    if (cached) {
+      skipListSearchEffectRef.current = true;
+      setListItems(cached.items);
+      setListTotalCount(cached.totalCount);
+      setListSkip(cached.skip);
+      setListStateFilter(cached.stateFilter);
+      setListSearch(cached.search);
+      return;
+    }
+
+    skipListSearchEffectRef.current = true;
+    setListItems([]);
+    setListTotalCount(0);
+    setListSkip(0);
+    setListStateFilter('');
+    setListSearch('');
+    loadLists('', 0, '', next).catch(() => undefined);
+  };
+
+  const patchCurrentListCache = (items: any[], totalCount: number) => {
+    const type = listViewRef.current.listType;
+    const prev = listsCacheRef.current[type];
+    listsCacheRef.current[type] = {
+      items,
+      totalCount,
+      skip: prev?.skip ?? 0,
+      stateFilter: listViewRef.current.listStateFilter,
+      search: listViewRef.current.listSearch,
+    };
+  };
+
+  const loadWhatsapp = useCallback(async (qOverride?: string) => {
+    const q = qOverride !== undefined ? qOverride : whatsappSearchRef.current;
+    const extra =
+      `&limit=50&skip=0` + (q ? `&q=${encodeURIComponent(q)}` : '');
+    const data = await adminGet('whatsapp', extra);
     setWhatsapp(data.items || []);
     if (data.whatsappSetup) {
       setConfig((c: any) => ({ ...(c || {}), whatsappSetup: data.whatsappSetup }));
@@ -228,27 +333,39 @@ export default function SmartAlertsPage() {
     applyTemplateForTrigger(triggerType, templates);
   };
 
+  // Stable callback — must NOT depend on `search`, or typing recreates loadCurrent and flashes the whole Automation pane.
   const loadProducts = useCallback(async (q?: string) => {
-    const term = q !== undefined ? q : search;
+    const term = q !== undefined ? q : inventorySearchRef.current;
     const data = await adminGet(
       'products',
-      `&limit=50&skip=0${term ? `&q=${encodeURIComponent(term)}` : ''}`,
+      `&stock=all&limit=50&skip=0${term ? `&q=${encodeURIComponent(term)}` : ''}`,
     );
     setTracked(data.tracked || []);
     setSearchResults(data.search || []);
+    const tz = String(data.siteTimeZone || 'UTC');
+    setSiteTimeZone(tz);
     const drafts: Record<string, { lowStockThreshold: string; restockAt: string }> = {};
     for (const row of data.tracked || []) {
       drafts[row._id || row.productId] = {
         lowStockThreshold: String(row.lowStockThreshold ?? 5),
-        restockAt: row.restockAt ? new Date(row.restockAt).toISOString().slice(0, 16) : '',
+        restockAt: storedToDatetimeLocal(row.restockAt, tz),
       };
     }
     setDraftOverrides(drafts);
-  }, [search]);
+  }, []);
 
   const loadAlerts = useCallback(async (skipOverride?: number) => {
     const skip = skipOverride !== undefined ? skipOverride : alertsSkip;
-    const data = await adminGet('alerts', `&limit=50&skip=${skip}`);
+    const q = alertSearchRef.current.trim();
+    const channelFilter = alertChannelFilterRef.current;
+    let extra = `&limit=50&skip=${skip}`;
+    if (q) extra += `&q=${encodeURIComponent(q)}`;
+    if (channelFilter === 'email' || channelFilter === 'whatsapp') {
+      extra += `&channel=${encodeURIComponent(channelFilter)}`;
+    } else if (channelFilter === 'failed') {
+      extra += `&status=failed`;
+    }
+    const data = await adminGet('alerts', extra);
     setAlerts(data.items || []);
     setAlertsTotalCount(data.totalCount ?? (data.items || []).length);
     setAlertsSkip(data.skip ?? skip);
@@ -262,18 +379,18 @@ export default function SmartAlertsPage() {
       if (primary === 'dashboard') {
         await loadDashboard();
       } else if (primary === 'automation') {
-        if (automationSub === 'rules') await loadConfig();
+        if (automationSub === 'rules' || automationSub === 'settings') await loadConfig();
         else if (automationSub === 'lists') await loadLists();
         else if (automationSub === 'inventory') await loadProducts('');
         else if (automationSub === 'whatsapp') {
           await Promise.all([loadWhatsapp(), loadConfig()]);
-        } else if (automationSub === 'history') await loadAlerts();
+        }
       } else if (primary === 'email') {
         await loadTemplates();
       } else if (primary === 'storefront') {
         await loadConfig();
-      } else if (primary === 'settings') {
-        await loadConfig();
+      } else if (primary === 'logs') {
+        await loadAlerts();
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load');
@@ -283,7 +400,6 @@ export default function SmartAlertsPage() {
   }, [
     primary,
     automationSub,
-    listType,
     loadDashboard,
     loadConfig,
     loadLists,
@@ -311,9 +427,13 @@ export default function SmartAlertsPage() {
     })();
   }, []);
 
-  // Debounced list filter without toggling the page loader
+  // Debounced search without toggling the page loader (type toggle uses cache, not this effect).
   useEffect(() => {
     if (primary !== 'automation' || automationSub !== 'lists') return;
+    if (skipListSearchEffectRef.current) {
+      skipListSearchEffectRef.current = false;
+      return;
+    }
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
     searchDebounce.current = setTimeout(() => {
       setListSkip(0);
@@ -322,7 +442,35 @@ export default function SmartAlertsPage() {
     return () => {
       if (searchDebounce.current) clearTimeout(searchDebounce.current);
     };
-  }, [listSearch, listType, primary, automationSub, loadLists]);
+  }, [listSearch, primary, automationSub, loadLists]);
+
+  const loadAlertsRef = useRef(loadAlerts);
+  loadAlertsRef.current = loadAlerts;
+  const loadWhatsappRef = useRef(loadWhatsapp);
+  loadWhatsappRef.current = loadWhatsapp;
+
+  useEffect(() => {
+    if (primary !== 'logs') return;
+    if (alertSearchDebounce.current) clearTimeout(alertSearchDebounce.current);
+    alertSearchDebounce.current = setTimeout(() => {
+      setAlertsSkip(0);
+      loadAlertsRef.current(0).catch(() => undefined);
+    }, 300);
+    return () => {
+      if (alertSearchDebounce.current) clearTimeout(alertSearchDebounce.current);
+    };
+  }, [alertSearch, alertChannelFilter, primary]);
+
+  useEffect(() => {
+    if (primary !== 'automation' || automationSub !== 'whatsapp') return;
+    if (whatsappSearchDebounce.current) clearTimeout(whatsappSearchDebounce.current);
+    whatsappSearchDebounce.current = setTimeout(() => {
+      loadWhatsappRef.current(whatsappSearch).catch(() => undefined);
+    }, 300);
+    return () => {
+      if (whatsappSearchDebounce.current) clearTimeout(whatsappSearchDebounce.current);
+    };
+  }, [whatsappSearch, primary, automationSub]);
 
   const saveModules = async (key: string, value: boolean) => {
     const next = {
@@ -345,8 +493,6 @@ export default function SmartAlertsPage() {
             triggerRules: config.triggerRules,
             notificationLimits: config.notificationLimits,
             appearance: config.appearance,
-            priceDropCooldownHours: config.priceDropCooldownHours,
-            digestFrequency: config.digestFrequency,
             globalLowStockThreshold: config.globalLowStockThreshold,
           },
         });
@@ -359,13 +505,14 @@ export default function SmartAlertsPage() {
   };
 
   let content: React.ReactNode = null;
-  if (loading) {
+  // Keep Automation shell (sidebar) mounted while subtab data loads.
+  if (loading && primary !== 'automation') {
     content = (
       <Box align="center" padding="60px">
         <Loader size="medium" />
       </Box>
     );
-  } else if (error) {
+  } else if (error && primary !== 'automation') {
     content = (
       <EmptyState title="Something went wrong" subtitle={error} skin="page-no-border">
         <Button onClick={() => loadCurrent()}>Retry</Button>
@@ -381,6 +528,7 @@ export default function SmartAlertsPage() {
           setAutomationSub(sub);
           setPrimary('automation');
         }}
+        onOpenLogs={() => setPrimary('logs')}
         onOpenCustomization={(sub = 'email') => {
           if (sub === 'storefront') {
             setPrimary('storefront');
@@ -403,10 +551,13 @@ export default function SmartAlertsPage() {
       <AutomationScreen
         sub={automationSub}
         onSubChange={setAutomationSub}
+        contentLoading={loading}
+        contentError={error}
+        onRetryLoad={() => loadCurrent()}
         config={config}
         setConfig={setConfig}
         listType={listType}
-        setListType={setListType}
+        setListType={handleSetListType}
         listSearch={listSearch}
         setListSearch={setListSearch}
         listItems={listItems}
@@ -427,24 +578,15 @@ export default function SmartAlertsPage() {
         selectedSubs={selectedSubs}
         setSelectedSubs={setSelectedSubs}
         whatsapp={whatsapp}
+        whatsappSearch={whatsappSearch}
+        setWhatsappSearch={setWhatsappSearch}
         tracked={tracked}
         search={search}
         setSearch={setSearch}
         searchResults={searchResults}
         draftOverrides={draftOverrides}
         setDraftOverrides={setDraftOverrides}
-        alerts={alerts}
-        alertsTotalCount={alertsTotalCount}
-        alertsSkip={alertsSkip}
-        onLoadMoreAlerts={() => {
-          const next = alertsSkip + 50;
-          if (next < alertsTotalCount) {
-            loadAlerts(next).catch(() => undefined);
-          }
-        }}
-        quota={quota}
-        selectedAlerts={selectedAlerts}
-        setSelectedAlerts={setSelectedAlerts}
+        siteTimeZone={siteTimeZone}
         rulesModule={rulesModule}
         setRulesModule={setRulesModule}
         onSaveModules={saveModules}
@@ -453,8 +595,8 @@ export default function SmartAlertsPage() {
         onReload={loadCurrent}
         onRun={runSafe}
         onGoSettings={() => {
-          setSettingsSub('general');
-          setPrimary('settings');
+          setPrimary('automation');
+          setAutomationSub('settings');
         }}
         onGoCustomization={(target: CustomizationSub = 'storefront', triggerType?: string) => {
           if (triggerType) {
@@ -469,9 +611,89 @@ export default function SmartAlertsPage() {
         adminPost={adminPost}
         onSearchProducts={() =>
           runSafe(async () => {
-            await loadProducts(search);
+            setInventorySearching(true);
+            try {
+              await loadProducts(inventorySearchRef.current);
+            } finally {
+              setInventorySearching(false);
+            }
           })
         }
+        onRefreshInventory={async () => {
+          await loadProducts('');
+        }}
+        inventorySearching={inventorySearching}
+        onResolveWhatsapp={async (ids, action) => {
+          try {
+            await adminPost({
+              action: action === 'sent' ? 'markWhatsappSent' : 'removeWhatsapp',
+              ids,
+            });
+            setWhatsapp((prev) => prev.filter((row) => !ids.includes(row._id)));
+            notify(
+              action === 'sent'
+                ? ids.length > 1
+                  ? `Marked ${ids.length} sent`
+                  : 'Marked sent'
+                : ids.length > 1
+                  ? `Dismissed ${ids.length}`
+                  : 'Dismissed',
+              'success',
+            );
+          } catch (e) {
+            notify(e instanceof Error ? e.message : 'Something went wrong', 'error');
+            throw e;
+          }
+        }}
+        onDeleteSubscribers={async (ids) => {
+          try {
+            await adminPost({ action: 'deleteSubscriptions', ids });
+            setListItems((prev) => {
+              const next = prev.filter((row) => !ids.includes(row._id));
+              const nextTotal = Math.max(0, listTotalCount - ids.length);
+              setListTotalCount(nextTotal);
+              patchCurrentListCache(next, nextTotal);
+              return next;
+            });
+            setSelectedSubs([]);
+            notify(
+              ids.length > 1 ? `Deleted ${ids.length} subscribers` : 'Deleted selected',
+              'success',
+            );
+          } catch (e) {
+            notify(e instanceof Error ? e.message : 'Something went wrong', 'error');
+            throw e;
+          }
+        }}
+        onTriggerSubscriber={async (productId) => {
+          try {
+            await adminPost({
+              action: 'manualTriggerAlert',
+              productId,
+              subscriptionType: listType,
+            });
+            setListItems((prev) => {
+              const updated = prev.map((row) =>
+                row.productId === productId ? { ...row, state: 'notified' } : row,
+              );
+              let next = updated;
+              let nextTotal = listTotalCount;
+              if (listStateFilter === 'waiting') {
+                next = updated.filter(
+                  (row) => !row.state || String(row.state).toLowerCase() === 'waiting',
+                );
+                nextTotal = Math.max(0, listTotalCount - (prev.length - next.length));
+                setListTotalCount(nextTotal);
+              }
+              patchCurrentListCache(next, nextTotal);
+              return next;
+            });
+            notify('Alert triggered', 'success');
+          } catch (e) {
+            notify(e instanceof Error ? e.message : 'Something went wrong', 'error');
+            throw e;
+          }
+        }}
       />
     );
   } else if (primary === 'email') {
@@ -496,15 +718,57 @@ export default function SmartAlertsPage() {
         adminPost={adminPost}
       />
     );
-  } else if (primary === 'settings') {
+  } else if (primary === 'logs') {
     content = (
-      <SettingsScreen
-        sub={settingsSub}
-        onSubChange={setSettingsSub}
-        config={config}
-        setConfig={setConfig}
-        onRun={runSafe}
-        adminPost={adminPost}
+      <LogsAndQuotaScreen
+        quota={quota}
+        alerts={alerts}
+        alertsTotalCount={alertsTotalCount}
+        onLoadMoreAlerts={() => {
+          const next = alertsSkip + 50;
+          if (next < alertsTotalCount) {
+            loadAlerts(next).catch(() => undefined);
+          }
+        }}
+        selectedAlerts={selectedAlerts}
+        setSelectedAlerts={setSelectedAlerts}
+        onDeleteSelectedAlerts={async () => {
+          await runSafe(async () => {
+            await adminPost({ action: 'deleteAlerts', ids: selectedAlerts });
+            setSelectedAlerts([]);
+            await loadAlerts(0);
+          }, 'Deleted selected alerts');
+        }}
+        onClearAllAlerts={async () => {
+          await runSafe(async () => {
+            let hasMore = true;
+            let totalDeleted = 0;
+            while (hasMore) {
+              const data = await adminPost({
+                action: 'deleteAlerts',
+                all: true,
+                maxBatches: 20,
+              });
+              totalDeleted += Number(data.deleted || 0);
+              hasMore = Boolean(data.hasMore);
+            }
+            await loadAlerts(0);
+            if (totalDeleted === 0) {
+              notify('No alerts to delete', 'warning');
+            }
+          }, 'All alerts deleted');
+        }}
+        alertSearch={alertSearch}
+        onAlertSearchChange={setAlertSearch}
+        alertChannelFilter={alertChannelFilter}
+        onAlertChannelFilterChange={(value) => {
+          setAlertChannelFilter(value);
+          setAlertsSkip(0);
+        }}
+        onGoSettings={() => {
+          setPrimary('automation');
+          setAutomationSub('settings');
+        }}
       />
     );
   }

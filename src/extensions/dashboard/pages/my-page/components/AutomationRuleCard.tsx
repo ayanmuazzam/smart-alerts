@@ -56,7 +56,8 @@ export function AutomationRuleCard({
   onCustomizeTemplate,
   onCustomize,
 }: AutomationRuleCardProps) {
-  const handleConfigure = onConfigure || onCustomize || (() => {});
+  // Prefer explicit onConfigure; legacy onCustomize only if no template action.
+  const configureHandler = onConfigure || (!onCustomizeTemplate ? onCustomize : undefined);
 
   const renderIcon = () => {
     switch (iconName) {
@@ -107,7 +108,7 @@ export function AutomationRuleCard({
 
         <Box direction="vertical" gap="SP1" width="100%">
           <Box verticalAlign="middle" gap="SP2" style={{ flexWrap: 'wrap' }}>
-            <Text weight="bold" size="medium" light={!enabled}>
+            <Text weight="bold" size="medium" secondary={!enabled}>
               {title}
             </Text>
             <Badge size="tiny" skin={getChannelBadgeSkin()}>
@@ -160,14 +161,16 @@ export function AutomationRuleCard({
               {templateLabel || 'Customize'}
             </TextButton>
           ) : null}
-          <Button
-            size="small"
-            priority="secondary"
-            prefixIcon={<SettingsSmall />}
-            onClick={handleConfigure}
-          >
-            Configure
-          </Button>
+          {configureHandler ? (
+            <Button
+              size="small"
+              priority="secondary"
+              prefixIcon={<SettingsSmall />}
+              onClick={configureHandler}
+            >
+              Configure
+            </Button>
+          ) : null}
         </Box>
       </Box>
     </Box>

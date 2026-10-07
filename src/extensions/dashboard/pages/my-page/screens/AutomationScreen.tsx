@@ -4,10 +4,9 @@ import {
   Box,
   Button,
   Card,
-  Checkbox,
   EmptyState,
+  Loader,
   SectionHelper,
-  Table,
   Text,
   TextButton,
 } from '@wix/design-system';
@@ -15,21 +14,24 @@ import {
   Package,
   Email,
   Chat,
-  DateAndTime,
-  Sparkles,
   SettingsSmall,
+  Settings,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge } from '../components/MonoIconBadge';
 import { ModuleRulesSidePanel } from '../components/ModuleRulesSidePanel';
 import { AutomationRuleCard } from '../components/AutomationRuleCard';
 import { SubscribersListTable } from '../components/SubscribersListTable';
 import { InventoryTrackerWorkspace } from '../components/InventoryTrackerWorkspace';
 import { WhatsAppQueueWorkspace } from '../components/WhatsAppQueueWorkspace';
-import { LogsAndQuotaWorkspace } from '../components/LogsAndQuotaWorkspace';
+import { SettingsScreen } from './SettingsScreen';
 import { MODULE_META, type AutomationSub, type ModuleMetaItem } from '../adminApi';
 
 type Props = {
   sub: AutomationSub;
   onSubChange: (sub: AutomationSub) => void;
+  contentLoading?: boolean;
+  contentError?: string;
+  onRetryLoad?: () => void;
   config: any;
   setConfig: (updater: any) => void;
   listType: string;
@@ -45,21 +47,18 @@ type Props = {
   selectedSubs: string[];
   setSelectedSubs: (ids: string[] | ((prev: string[]) => string[])) => void;
   whatsapp: any[];
+  whatsappSearch: string;
+  setWhatsappSearch: (s: string) => void;
   tracked: any[];
   search: string;
   setSearch: (s: string) => void;
   searchResults: any[];
+  inventorySearching?: boolean;
   draftOverrides: Record<string, { lowStockThreshold: string; restockAt: string }>;
   setDraftOverrides: React.Dispatch<
     React.SetStateAction<Record<string, { lowStockThreshold: string; restockAt: string }>>
   >;
-  alerts: any[];
-  alertsTotalCount?: number;
-  alertsSkip?: number;
-  onLoadMoreAlerts?: () => void;
-  quota: any;
-  selectedAlerts: string[];
-  setSelectedAlerts: (ids: string[] | ((prev: string[]) => string[])) => void;
+  siteTimeZone: string;
   rulesModule: string | null;
   setRulesModule: (key: string | null) => void;
   onSaveModules: (key: string, value: boolean) => void;
@@ -71,23 +70,22 @@ type Props = {
   onGoCustomization: (target?: 'email' | 'storefront', triggerType?: string) => void;
   adminPost: (body: Record<string, unknown>) => Promise<any>;
   onSearchProducts: () => void;
+  onRefreshInventory: () => Promise<void>;
+  onResolveWhatsapp: (ids: string[], action: 'sent' | 'dismiss') => Promise<void>;
+  onDeleteSubscribers: (ids: string[]) => Promise<void>;
+  onTriggerSubscriber: (productId: string) => Promise<void>;
 };
 
 function getTriggerSummary(key: string, config: any): string {
   const triggers = config?.triggerRules || {};
   const appearance = config?.appearance || {};
-  const limits = config?.notificationLimits || {};
 
   switch (key) {
-    case 'backInStock': {
-      const minQty = triggers.backInStockMinQty ?? 1;
-      const mode = limits.batchMode === 'hourly' ? 'Hourly batch' : 'Instant';
-      return `Triggers when restock ≥ ${minQty} unit(s) • ${mode} delivery`;
-    }
+    case 'backInStock':
+      return 'Notifies subscribers when stock returns';
     case 'priceDrop': {
       const pct = triggers.priceDropMinPercent ?? 0;
-      const cooldown = config?.priceDropCooldownHours ?? 24;
-      return `Triggers on ≥ ${pct}% price drop • ${cooldown}h cooldown`;
+      return `Triggers on ≥ ${pct}% price drop`;
     }
     case 'manualWhatsapp':
       return 'Generates click-to-chat WhatsApp links in queue';
@@ -96,12 +94,6 @@ function getTriggerSummary(key: string, config: any): string {
     case 'sellerLowStock': {
       const threshold = triggers.globalLowStockThreshold ?? config?.globalLowStockThreshold ?? 5;
       return `Alerts store manager when stock falls to ≤ ${threshold} units`;
-    }
-    case 'sellerNewOrder':
-      return 'Immediate notification for each completed checkout';
-    case 'digest': {
-      const freq = config?.digestFrequency || 'weekly';
-      return `Frequency: ${freq === 'off' ? 'Paused' : freq.charAt(0).toUpperCase() + freq.slice(1)}`;
     }
     case 'stockCounter': {
       const threshold = appearance.stockThreshold ?? 10;
@@ -118,7 +110,11 @@ export function AutomationScreen(props: Props) {
   const {
     sub,
     onSubChange,
+    contentLoading = false,
+    contentError = '',
+    onRetryLoad,
     config,
+    setConfig,
     listType,
     setListType,
     listSearch,
@@ -131,18 +127,16 @@ export function AutomationScreen(props: Props) {
     selectedSubs,
     setSelectedSubs,
     whatsapp,
+    whatsappSearch,
+    setWhatsappSearch,
     tracked,
     search,
     setSearch,
     searchResults,
+    inventorySearching = false,
     draftOverrides,
     setDraftOverrides,
-    alerts,
-    alertsTotalCount = 0,
-    onLoadMoreAlerts,
-    quota,
-    selectedAlerts,
-    setSelectedAlerts,
+    siteTimeZone,
     rulesModule,
     setRulesModule,
     onSaveModules,
@@ -154,6 +148,10 @@ export function AutomationScreen(props: Props) {
     onGoCustomization,
     adminPost,
     onSearchProducts,
+    onRefreshInventory,
+    onResolveWhatsapp,
+    onDeleteSubscribers,
+    onTriggerSubscriber,
   } = props;
 
   const groupInfo: Record<string, { title: string; subtitle: string }> = {
@@ -163,7 +161,7 @@ export function AutomationScreen(props: Props) {
     },
     SELLER: {
       title: 'Store Manager Alerts',
-      subtitle: 'Internal alerts to keep your team informed on inventory depletion and new orders.',
+      subtitle: 'Internal alerts to keep your team informed on inventory depletion.',
     },
     URGENCY: {
       title: 'Storefront Urgency Badges',
@@ -171,9 +169,7 @@ export function AutomationScreen(props: Props) {
     },
   };
 
-  const sellerOn = ['sellerOutOfStock', 'sellerLowStock', 'sellerNewOrder', 'digest'].some(
-    (k) => config?.modules?.[k],
-  );
+  const sellerOn = ['sellerOutOfStock', 'sellerLowStock'].some((k) => config?.modules?.[k]);
   const activeMeta = MODULE_META.find((m) => m.key === rulesModule);
 
 
@@ -204,9 +200,9 @@ export function AutomationScreen(props: Props) {
       icon: <Chat size="18" />,
     },
     {
-      id: 'history',
-      title: 'Logs & Quota',
-      icon: <DateAndTime size="18" />,
+      id: 'settings',
+      title: 'Settings',
+      icon: <Settings size="18" />,
     },
   ];
 
@@ -276,16 +272,9 @@ export function AutomationScreen(props: Props) {
                       boxShadow: isActive ? 'inset 3px 0 0 #116DFF' : 'none',
                     }}
                   >
-                    <div
-                      style={{
-                        color: isActive ? '#116DFF' : '#64748B',
-                        display: 'flex',
-                        alignItems: 'center',
-                        flexShrink: 0,
-                      }}
-                    >
+                    <MonoIconBadge tone={isActive ? 'blue' : 'slate'} size={28}>
                       {item.icon}
-                    </div>
+                    </MonoIconBadge>
                     <span style={{ fontSize: '13px', fontWeight: isActive ? 600 : 500, whiteSpace: 'nowrap' }}>
                       {item.title}
                     </span>
@@ -322,7 +311,7 @@ export function AutomationScreen(props: Props) {
                 lineHeight: '1.4',
               }}
             >
-              Manage sender addresses, notification limits, and store sync.
+              Manage seller email, support contacts, and monthly alert quota.
             </div>
             <TextButton size="small" onClick={onGoSettings}>
               Open Settings →
@@ -333,6 +322,16 @@ export function AutomationScreen(props: Props) {
 
       {/* 2. Main Workspace View */}
       <Box direction="vertical" style={{ flex: 1, minWidth: 0 }} gap="SP4">
+        {contentLoading ? (
+          <Box align="center" padding="60px">
+            <Loader size="medium" />
+          </Box>
+        ) : contentError ? (
+          <EmptyState title="Something went wrong" subtitle={contentError} skin="page-no-border">
+            <Button onClick={() => onRetryLoad?.()}>Retry</Button>
+          </EmptyState>
+        ) : (
+          <>
         {/* Rules Workspace */}
         {sub === 'rules' && config ? (
           <Box direction="vertical" gap="SP4">
@@ -393,7 +392,14 @@ export function AutomationScreen(props: Props) {
                             triggerSummary={summary}
                             templateLabel={templateLabel}
                             onToggle={() => onSaveModules(m.key, !isEnabled)}
-                            onConfigure={() => setRulesModule(m.key)}
+                            onConfigure={
+                              m.key === 'whatsapp' ||
+                              m.key === 'manualWhatsapp' ||
+                              m.key === 'backInStock' ||
+                              m.key === 'sellerOutOfStock'
+                                ? undefined
+                                : () => setRulesModule(m.key)
+                            }
                             onCustomizeTemplate={() => {
                               if (m.customizationTarget === 'whatsapp') {
                                 onSubChange('whatsapp');
@@ -460,22 +466,9 @@ export function AutomationScreen(props: Props) {
               }, 'CSV exported');
             }}
             onDeleteSelected={async () => {
-              await onRun(async () => {
-                await adminPost({ action: 'deleteSubscriptions', ids: selectedSubs });
-                setSelectedSubs([]);
-                onReload();
-              }, 'Deleted selected');
+              await onDeleteSubscribers(selectedSubs);
             }}
-            onManualTrigger={async (productId) => {
-              await onRun(async () => {
-                await adminPost({
-                  action: 'manualTriggerAlert',
-                  productId,
-                  subscriptionType: listType,
-                });
-                onReload();
-              }, 'Alert triggered');
-            }}
+            onManualTrigger={onTriggerSubscriber}
             onGoRules={() => onSubChange('rules')}
             onGoCustomization={() => onGoCustomization('storefront')}
           />
@@ -486,12 +479,13 @@ export function AutomationScreen(props: Props) {
           <InventoryTrackerWorkspace
             search={search}
             setSearch={setSearch}
+            searching={inventorySearching}
             onSearchProducts={onSearchProducts}
             onLoadOos={async () => {
               await onRun(async () => {
                 await adminPost({ action: 'loadOos' });
-                onReload();
-              }, 'Out-of-stock products loaded');
+                await onRefreshInventory();
+              }, 'Out-of-stock catalog scanned');
             }}
             searchResults={searchResults}
             onTrackProduct={async (row) => {
@@ -500,14 +494,17 @@ export function AutomationScreen(props: Props) {
                   action: 'saveOverride',
                   productId: row.id,
                   productName: row.name,
-                  lastStockStatus: row.stockStatus,
+                  lastStockStatus: row.stockStatus || 'OUT_OF_STOCK',
+                  tracked: true,
+                  trackedSource: 'manual',
                 });
-                onReload();
+                await onRefreshInventory();
               }, 'Tracking product');
             }}
             tracked={tracked}
             draftOverrides={draftOverrides}
             setDraftOverrides={setDraftOverrides}
+            siteTimeZone={siteTimeZone}
             onSaveProductOverride={async (row) => {
               const key = row._id || row.productId;
               const draft = draftOverrides[key];
@@ -516,68 +513,42 @@ export function AutomationScreen(props: Props) {
                   action: 'saveOverride',
                   productId: row.productId,
                   productName: row.productName,
-                  lastStockStatus: row.lastStockStatus,
+                  lastStockStatus: row.lastStockStatus || 'OUT_OF_STOCK',
                   lowStockThreshold: Number(
                     draft?.lowStockThreshold ?? row.lowStockThreshold ?? 5,
                   ),
                   useGlobalThreshold: false,
-                  restockAt:
-                    draft?.restockAt && draft.restockAt.trim() !== ''
-                      ? new Date(draft.restockAt).toISOString()
-                      : null,
+                  tracked: true,
+                  trackedSource: 'manual',
+                  // Wall-clock; server converts using site Language & Region TZ.
+                  restockAt: draft?.restockAt ? draft.restockAt : null,
                 });
-                onReload();
+                await onRefreshInventory();
               }, 'Product saved');
-          }}
-        />
-      ) : null}
+            }}
+          />
+        ) : null}
 
         {/* WhatsApp Queue Workspace */}
         {sub === 'whatsapp' ? (
           <WhatsAppQueueWorkspace
             whatsapp={whatsapp}
-            config={config}
-            onMarkSent={async (id) => {
-              await onRun(async () => {
-                await adminPost({ action: 'markWhatsappSent', id });
-                onReload();
-              }, 'Marked sent');
-            }}
-            onDismiss={async (id) => {
-              await onRun(async () => {
-                await adminPost({ action: 'removeWhatsapp', id });
-                onReload();
-              }, 'Removed');
-            }}
-            onGoSettings={onGoSettings}
+            onResolve={onResolveWhatsapp}
+            search={whatsappSearch}
+            onSearchChange={setWhatsappSearch}
           />
         ) : null}
 
-        {/* Logs & Quota Workspace */}
-        {sub === 'history' ? (
-          <LogsAndQuotaWorkspace
-            quota={quota}
-            alerts={alerts}
-            alertsTotalCount={alertsTotalCount}
-            onLoadMore={onLoadMoreAlerts}
-            selectedAlerts={selectedAlerts}
-            setSelectedAlerts={setSelectedAlerts}
-            onDeleteSelectedAlerts={async () => {
-              await onRun(async () => {
-                await adminPost({ action: 'deleteAlerts', ids: selectedAlerts });
-                setSelectedAlerts([]);
-                onReload();
-              }, 'Deleted selected alerts');
-            }}
-            onClearAllAlerts={async () => {
-              await onRun(async () => {
-                await adminPost({ action: 'deleteAlerts', all: true });
-                onReload();
-              }, 'All alerts deleted');
-            }}
-            onGoSettings={onGoSettings}
+        {sub === 'settings' ? (
+          <SettingsScreen
+            config={config}
+            setConfig={setConfig}
+            onRun={onRun}
+            adminPost={adminPost}
           />
         ) : null}
+          </>
+        )}
       </Box>
     </Box>
   );

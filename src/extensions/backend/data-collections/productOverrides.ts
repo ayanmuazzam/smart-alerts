@@ -18,6 +18,8 @@ export default {
     { type: 'TEXT', key: 'lastStockStatus', displayName: 'Last Stock Status' },
     { type: 'DATETIME', key: 'lastLowStockAlertAt', displayName: 'Last Low Stock Alert At' },
     { type: 'BOOLEAN', key: 'tracked', displayName: 'Tracked' },
+    // 'manual' = Track Product button; 'scan' = Scan Out-of-Stock; omit/system = cache only
+    { type: 'TEXT', key: 'trackedSource', displayName: 'Tracked Source' },
   ],
   displayField: 'title',
   dataPermissions: {
@@ -32,6 +34,9 @@ export default {
     },
     {
       fields: [{ path: 'tracked' }],
+    },
+    {
+      fields: [{ path: 'trackedSource' }],
     },
   ],
   initialData: [],

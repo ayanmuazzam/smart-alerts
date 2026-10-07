@@ -9,13 +9,11 @@ export const COLLECTIONS = {
   alerts: `${APP_NAMESPACE}/alerts`,
   whatsappQueue: `${APP_NAMESPACE}/whatsappQueue`,
   processedEvents: `${APP_NAMESPACE}/processedEvents`,
-  pendingSends: `${APP_NAMESPACE}/pendingSends`,
 } as const;
 
 export const CONFIG_SINGLETON_ID = 'site-config';
 
 export const DEFAULT_QUOTA = 5000;
-export const PRICE_DROP_COOLDOWN_HOURS = 24;
 
 export const DEFAULT_NOTIFICATION_LIMITS = {
   maxEmailPerCustomerPerDay: 3,
@@ -26,7 +24,6 @@ export const DEFAULT_NOTIFICATION_LIMITS = {
 };
 
 export const DEFAULT_TRIGGER_RULES = {
-  backInStockMinQty: 1,
   priceDropMinPercent: 0,
   priceDropMinAmount: 0,
   globalLowStockThreshold: 5,
@@ -34,15 +31,13 @@ export const DEFAULT_TRIGGER_RULES = {
 };
 
 export const DEFAULT_WHATSAPP_SETUP = {
-  mode: 'manual' as 'manual' | 'api',
-  senderPhone: '',
-  provider: 'none' as 'none' | 'twilio',
-  connectionStatus: 'disconnected' as 'disconnected' | 'connected' | 'error',
-  lastError: '',
+  mode: 'manual' as const,
+  provider: 'none' as const,
 };
 
 export const DEFAULT_SYNC_SETTINGS = {
-  cacheRefresh: 'realtime' as 'realtime' | 'hourly' | 'daily',
+  /** Legacy field kept for older saved configs; cadence is no longer used. */
+  cacheRefresh: 'realtime' as const,
   lastEventAt: '' as string,
   lastCacheRefreshAt: '' as string,
   lastEventType: '' as string,
@@ -54,8 +49,6 @@ export type ModuleKey =
   | 'manualWhatsapp'
   | 'sellerOutOfStock'
   | 'sellerLowStock'
-  | 'sellerNewOrder'
-  | 'digest'
   | 'stockCounter'
   | 'restockCountdown';
 
@@ -64,8 +57,6 @@ export type AlertType =
   | 'price_drop'
   | 'seller_oos'
   | 'seller_low_stock'
-  | 'seller_new_order'
-  | 'digest'
   | 'whatsapp';
 
 export type SubscriptionType = 'back_in_stock' | 'price_drop';
@@ -77,8 +68,6 @@ export const DEFAULT_MODULES: Record<ModuleKey, boolean> = {
   manualWhatsapp: true,
   sellerOutOfStock: true,
   sellerLowStock: true,
-  sellerNewOrder: true,
-  digest: false,
   stockCounter: true,
   restockCountdown: false,
 };
@@ -101,7 +90,12 @@ export const DEFAULT_STOREFRONT_BUTTON = {
 
 export const DEFAULT_APPEARANCE = {
   preset: 'teal',
-  timerStyle: 'pill' as 'pill' | 'blocks' | 'banner',
+  timerStyle: 'pill' as 'pill' | 'blocks' | 'banner' | 'card',
+  timerTheme: 'solid' as 'tint' | 'solid' | 'dark',
+  timerPrefix: 'Back in stock in',
+  timerShowSeconds: true,
+  timerPulse: true,
+  timerShowIcon: true,
   colors: {
     primary: '#0F766E',
     secondary: '#134E4A',
@@ -109,11 +103,12 @@ export const DEFAULT_APPEARANCE = {
     text: '#0F172A',
     background: '#FFFFFF',
     buttonText: '#FFFFFF',
-    badge: '#F59E0B',
+    badge: '#000000',
     muted: '#64748B',
     inputBackground: '#FFFFFF',
     inputText: '#0F172A',
-    inputBorder: '#E2E8F0',
+    /** Kept in sync with secondary — modal + input borders. */
+    inputBorder: '#134E4A',
     label: '#64748B',
   },
   buttons: {
@@ -158,14 +153,14 @@ export const DEFAULT_APPEARANCE = {
   },
   modal: {
     borderRadius: 0,
-    borderWidth: 0,
+    borderWidth: 1,
     padding: 48,
     maxWidth: 575,
     titleFontSize: 22,
     descriptionFontSize: 15,
     labelFontSize: 14,
     inputBorderRadius: 0,
-    inputBorderWidth: 0,
+    inputBorderWidth: 1,
     inputPadding: 15,
     notifyTitle: 'Notify me when back in stock',
     notifyDescription: "We'll email you when this product is available again.",
@@ -177,6 +172,12 @@ export const DEFAULT_APPEARANCE = {
     phonePlaceholder: '+1…',
     notifyConsentLabel: 'I agree to receive stock alerts for this product.',
     priceConsentLabel: 'Send me a price-drop alert.',
+    notifySuccessTitle: "You're subscribed!",
+    notifySuccessDescription: "We'll email you when it's back in stock.",
+    priceSuccessTitle: "You're watching this price!",
+    priceSuccessDescription: "We'll email you if the price drops.",
+    /** Auto-close modal after success (ms). */
+    successAutoCloseMs: 2500,
   },
   cornerPosition: 'bottom-left' as
     | 'bottom-left'
@@ -191,7 +192,6 @@ export const DEFAULT_BRAND = {
   logoUrl: '',
   primaryColor: '#0F766E',
   secondaryColor: '#134E4A',
-  footerText: 'Thanks for shopping with {store_name}.',
 };
 
 export const DEFAULT_SUPPORT = {
@@ -311,51 +311,6 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<string, EmailTemplateDefaults> = {
     closingText: 'High demand detected—restock early.',
     signoffText: 'Smart Alerts System',
     footerDisclaimer: 'Internal seller notification sent to store administrators.',
-  },
-  seller_new_order: {
-    layout: 'Centered',
-    subject: 'New order at {store_name} 🛍️',
-    preheader: 'A customer just placed an order',
-    headerStyle: 'dark',
-    headerText: '{store_name}',
-    showBadge: true,
-    badgeText: 'New Order Received 🛍️',
-    headline: 'You have a new order!',
-    body:
-      'Nice work—a new order just came in at {store_name}.\n\n' +
-      'Open your orders dashboard to fulfill it and keep the customer happy.',
-    showProductImage: false,
-    reviewQuote: '',
-    buttonLabel: 'View Orders',
-    showFeatures: false,
-    featuresTitle: '',
-    featuresText: '',
-    closingText: 'Prompt fulfillment leads to 5-star customer reviews!',
-    signoffText: 'Smart Alerts System',
-    footerDisclaimer: 'Internal seller notification sent to store administrators.',
-  },
-  digest: {
-    layout: 'Centered',
-    subject: 'Your Smart Alerts digest from {store_name} 📊',
-    preheader: 'A quick look at waitlists, alerts, and stock activity',
-    headerStyle: 'dark',
-    headerText: '{store_name}',
-    showBadge: true,
-    badgeText: 'Weekly Digest 📊',
-    headline: 'Your Smart Alerts summary',
-    body:
-      'Hi there,\n\n' +
-      'Here’s your Smart Alerts digest for {store_name}: active waitlists, recent notifications, and stock activity worth a glance.\n\n' +
-      'Open the dashboard anytime to fine-tune modules and templates.',
-    showProductImage: false,
-    reviewQuote: '',
-    buttonLabel: 'Open Dashboard',
-    showFeatures: false,
-    featuresTitle: '',
-    featuresText: '',
-    closingText: 'Review your alert automation performance anytime in the dashboard.',
-    signoffText: 'Smart Alerts System',
-    footerDisclaimer: 'Consolidated performance summary sent to store managers.',
   },
 };
 

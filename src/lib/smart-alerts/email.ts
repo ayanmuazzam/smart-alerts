@@ -97,7 +97,7 @@ export function buildEmailHtml(opts: {
       <div style="border:1px solid #e5e7eb;border-radius:8px;padding:20px;margin:0 0 24px 0;background-color:#fafafa;text-align:center;">
         ${prodImg}
         <h3 style="font-size:18px;font-weight:700;margin:0 0 6px 0;color:#111827;">${prodTitle}</h3>
-        <p style="font-size:16px;color:#059669;font-weight:600;margin:0 0 8px 0;">${prodPrice}</p>
+        <p style="font-size:16px;color:${secondaryColor};font-weight:600;margin:0 0 8px 0;">${prodPrice}</p>
         ${quoteHtml}
       </div>`;
   }
@@ -141,7 +141,7 @@ export function buildEmailHtml(opts: {
   );
   const wa = String(opts.supportWhatsapp || '').replace(/[^\d+]/g, '');
   const waFooter = wa
-    ? ` &bull; <a href="https://wa.me/${wa.replace('+', '')}" style="color:${secondaryColor};text-decoration:underline;">WhatsApp Support</a>`
+    ? `<p style="margin:8px 0 0 0;"><a href="https://wa.me/${wa.replace('+', '')}" style="color:${secondaryColor};text-decoration:underline;">WhatsApp Support</a></p>`
     : '';
 
   const isCentered = opts.layout !== 'Classic';
@@ -172,12 +172,8 @@ export function buildEmailHtml(opts: {
       ${closingHtml}
     </div>
     <div style="background-color:#f9fafb;padding:20px;text-align:center;font-size:12px;color:#9ca3af;border-top:1px solid #e5e7eb;">
-      <p style="margin:0 0 8px 0;">${footerDisclaimer}</p>
-      <p style="margin:0;">
-        <a href="#" style="color:${secondaryColor};text-decoration:underline;">Unsubscribe</a> &bull;
-        <a href="#" style="color:${secondaryColor};text-decoration:underline;">Manage Preferences</a> &bull;
-        <a href="#" style="color:${secondaryColor};text-decoration:underline;">View in Browser</a>${waFooter}
-      </p>
+      <p style="margin:0;">${footerDisclaimer}</p>
+      ${waFooter}
     </div>
   </div>
 </body>
@@ -202,47 +198,15 @@ export async function canSendAlert(config?: SiteConfig): Promise<{ ok: boolean; 
   return { ok: used < quota, used, remaining: Math.max(0, quota - used), quota };
 }
 
-export async function countCustomerAlerts(
-  to: string,
-  channel: string,
-  days: number,
-): Promise<number> {
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+async function countCustomerAlerts(to: string, since: Date): Promise<number> {
   const query = auth.elevate(items.query);
   const result = await query(COLLECTIONS.alerts)
     .eq('to', to)
-    .eq('channel', channel)
     .eq('status', 'sent')
     .ge('sentAt', since)
     .limit(1)
     .find({ returnTotalCount: true });
   return result.totalCount ?? result.items.length;
-}
-
-/** Per-customer throttle based on notificationLimits. */
-export async function canNotifyCustomer(
-  to: string,
-  channel: 'email' | 'whatsapp',
-  config?: SiteConfig,
-): Promise<{ ok: boolean; reason?: string }> {
-  const cfg = config || (await getOrCreateConfig());
-  const limits = cfg.notificationLimits;
-  if (channel === 'email') {
-    const day = await countCustomerAlerts(to, 'email', 1);
-    if (day >= (limits.maxEmailPerCustomerPerDay ?? 3)) {
-      return { ok: false, reason: 'Daily email limit reached for this customer' };
-    }
-    const week = await countCustomerAlerts(to, 'email', 7);
-    if (week >= (limits.maxEmailPerCustomerPerWeek ?? 10)) {
-      return { ok: false, reason: 'Weekly email limit reached for this customer' };
-    }
-  } else {
-    const day = await countCustomerAlerts(to, 'whatsapp', 1);
-    if (day >= (limits.maxWhatsappPerCustomerPerDay ?? 2)) {
-      return { ok: false, reason: 'Daily WhatsApp limit reached for this customer' };
-    }
-  }
-  return { ok: true };
 }
 
 export async function logAlert(entry: {
@@ -291,15 +255,20 @@ export async function sendTransactionalEmail(opts: {
   }
 
   if (!opts.skipCustomerLimit) {
-    const customer = await canNotifyCustomer(opts.to, 'email', config);
-    if (!customer.ok) {
+    const lim = config.notificationLimits;
+    const day = await countCustomerAlerts(opts.to, new Date(Date.now() - 86_400_000));
+    const week = await countCustomerAlerts(opts.to, new Date(Date.now() - 7 * 86_400_000));
+    if (
+      day >= (lim.maxEmailPerCustomerPerDay || 3) ||
+      week >= (lim.maxEmailPerCustomerPerWeek || 10)
+    ) {
       await logAlert({
         alertType: opts.alertType,
         channel: 'email',
         to: opts.to,
         status: 'skipped',
         productId: opts.productId,
-        errorMessage: customer.reason,
+        errorMessage: 'Customer notification limit',
       });
       return false;
     }

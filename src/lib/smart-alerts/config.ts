@@ -12,7 +12,6 @@ import {
   DEFAULT_SYNC_SETTINGS,
   DEFAULT_TRIGGER_RULES,
   DEFAULT_WHATSAPP_SETUP,
-  PRICE_DROP_COOLDOWN_HOURS,
   type ModuleKey,
 } from './constants';
 import {
@@ -31,11 +30,8 @@ export type SiteConfig = {
   brand: typeof DEFAULT_BRAND;
   support: typeof DEFAULT_SUPPORT;
   monthlyAlertQuota: number;
-  priceDropCooldownHours: number;
-  digestFrequency: 'daily' | 'weekly' | 'off';
   sellerEmail: string;
   globalLowStockThreshold: number;
-  lastDigestAt?: Date | string | null;
   /** Optional public app origin (legacy; no longer used for customer unsubscribe links). */
   publicAppBaseUrl?: string;
   notificationLimits: typeof DEFAULT_NOTIFICATION_LIMITS;
@@ -82,22 +78,8 @@ function sanitizePatch(patch: Partial<SiteConfig>): Partial<SiteConfig> {
   if (patch.monthlyAlertQuota != null) {
     out.monthlyAlertQuota = clampPositiveInt(patch.monthlyAlertQuota, DEFAULT_QUOTA, 1_000_000);
   }
-  if (patch.priceDropCooldownHours != null) {
-    out.priceDropCooldownHours = clampPositiveInt(
-      patch.priceDropCooldownHours,
-      PRICE_DROP_COOLDOWN_HOURS,
-      8760,
-    );
-  }
   if (patch.globalLowStockThreshold != null) {
     out.globalLowStockThreshold = clampPositiveInt(patch.globalLowStockThreshold, 5, 100000);
-  }
-  if (patch.digestFrequency != null) {
-    const f = String(patch.digestFrequency);
-    if (!['daily', 'weekly', 'off'].includes(f)) {
-      throw new Error('Invalid digestFrequency');
-    }
-    out.digestFrequency = f as SiteConfig['digestFrequency'];
   }
 
   if (patch.modules) {
@@ -138,11 +120,11 @@ function sanitizePatch(patch: Partial<SiteConfig>): Partial<SiteConfig> {
         { secondaryColor: DEFAULT_BRAND.secondaryColor },
       ).secondaryColor,
       logoUrl: safeUrl(patch.brand.logoUrl, ''),
-      footerText: String(patch.brand.footerText || ''),
     };
   }
 
   if (patch.notificationLimits) {
+    // batchMode hourly has no scheduler after cron removal — force immediate.
     out.notificationLimits = {
       maxEmailPerCustomerPerDay: clampPositiveInt(
         patch.notificationLimits.maxEmailPerCustomerPerDay,
@@ -159,11 +141,8 @@ function sanitizePatch(patch: Partial<SiteConfig>): Partial<SiteConfig> {
         DEFAULT_NOTIFICATION_LIMITS.maxWhatsappPerCustomerPerDay,
         50,
       ),
-      batchMode: patch.notificationLimits.batchMode === 'hourly' ? 'hourly' : 'immediate',
-      batchHourUtc: Math.min(
-        23,
-        Math.max(0, Math.floor(Number(patch.notificationLimits.batchHourUtc ?? 9)) || 0),
-      ),
+      batchMode: 'immediate',
+      batchHourUtc: DEFAULT_NOTIFICATION_LIMITS.batchHourUtc,
     };
   }
 
@@ -171,10 +150,6 @@ function sanitizePatch(patch: Partial<SiteConfig>): Partial<SiteConfig> {
     out.triggerRules = {
       ...DEFAULT_TRIGGER_RULES,
       ...patch.triggerRules,
-      backInStockMinQty: clampPositiveInt(
-        patch.triggerRules.backInStockMinQty,
-        DEFAULT_TRIGGER_RULES.backInStockMinQty,
-      ),
       priceDropMinPercent: clampNonNegative(
         patch.triggerRules.priceDropMinPercent,
         DEFAULT_TRIGGER_RULES.priceDropMinPercent,
@@ -193,14 +168,10 @@ function sanitizePatch(patch: Partial<SiteConfig>): Partial<SiteConfig> {
   }
 
   if (patch.whatsappSetup) {
-    const mode = patch.whatsappSetup.mode === 'api' ? 'api' : 'manual';
-    const provider = patch.whatsappSetup.provider === 'twilio' ? 'twilio' : 'none';
     out.whatsappSetup = {
       ...DEFAULT_WHATSAPP_SETUP,
-      ...patch.whatsappSetup,
-      mode,
-      provider,
-      senderPhone: String(patch.whatsappSetup.senderPhone || '').trim(),
+      mode: 'manual',
+      provider: 'none',
     };
   }
 
@@ -246,16 +217,12 @@ function normalizeConfig(raw: Partial<SiteConfig> & { _id?: string }): SiteConfi
       raw.globalLowStockThreshold ??
       DEFAULT_TRIGGER_RULES.globalLowStockThreshold,
   };
-  const digest =
-    raw.digestFrequency === 'daily' ||
-    raw.digestFrequency === 'weekly' ||
-    raw.digestFrequency === 'off'
-      ? raw.digestFrequency
-      : 'weekly';
+  const modulesRaw = { ...DEFAULT_MODULES, ...(raw.modules || {}) } as Record<string, boolean>;
+  delete modulesRaw.digest;
   return {
     _id: raw._id || CONFIG_SINGLETON_ID,
     title: raw.title || 'Smart Alerts Config',
-    modules: { ...DEFAULT_MODULES, ...(raw.modules || {}) },
+    modules: modulesRaw as Record<ModuleKey, boolean>,
     appearance,
     brand: {
       ...DEFAULT_BRAND,
@@ -272,15 +239,21 @@ function normalizeConfig(raw: Partial<SiteConfig> & { _id?: string }): SiteConfi
     },
     support: { ...DEFAULT_SUPPORT, ...(raw.support || {}) },
     monthlyAlertQuota: clampPositiveInt(raw.monthlyAlertQuota, DEFAULT_QUOTA),
-    priceDropCooldownHours: clampPositiveInt(raw.priceDropCooldownHours, PRICE_DROP_COOLDOWN_HOURS),
-    digestFrequency: digest,
     sellerEmail: raw.sellerEmail || '',
     globalLowStockThreshold: triggerRules.globalLowStockThreshold,
-    lastDigestAt: raw.lastDigestAt ?? null,
     publicAppBaseUrl: raw.publicAppBaseUrl || '',
-    notificationLimits: { ...DEFAULT_NOTIFICATION_LIMITS, ...(raw.notificationLimits || {}) },
+    notificationLimits: {
+      ...DEFAULT_NOTIFICATION_LIMITS,
+      ...(raw.notificationLimits || {}),
+      batchMode: 'immediate',
+    },
     triggerRules,
-    whatsappSetup: { ...DEFAULT_WHATSAPP_SETUP, ...(raw.whatsappSetup || {}) },
+    whatsappSetup: {
+      ...DEFAULT_WHATSAPP_SETUP,
+      ...(raw.whatsappSetup || {}),
+      mode: 'manual',
+      provider: 'none',
+    },
     syncSettings: { ...DEFAULT_SYNC_SETTINGS, ...(raw.syncSettings || {}) },
   };
 }
@@ -407,9 +380,11 @@ export function getLowStockThreshold(
 }
 
 export async function markEventProcessed(eventId: string, eventType: string): Promise<boolean> {
+  // Missing ids still process (some local/dev deliveries omit metadata.id).
+  // Without an id we cannot de-dupe — prefer sending over silently dropping restocks.
   if (!eventId) {
-    console.warn('Smart Alerts: missing event id; refusing to process');
-    return true;
+    console.warn(`Smart Alerts: missing event id for ${eventType}; processing without de-dupe`);
+    return false;
   }
   const query = elevate.query();
   const found = await query(COLLECTIONS.processedEvents).eq('eventId', eventId).limit(1).find();

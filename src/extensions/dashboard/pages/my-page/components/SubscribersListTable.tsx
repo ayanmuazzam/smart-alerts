@@ -24,6 +24,7 @@ import {
   Tag,
   Sparkles,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge } from './MonoIconBadge';
 
 export interface SubscriberItem {
   _id: string;
@@ -32,6 +33,9 @@ export interface SubscriberItem {
   productName?: string;
   state?: string;
   createdAt?: string;
+  _createdDate?: string | Date;
+  watchedPrice?: number;
+  currentPrice?: number;
 }
 
 export interface SubscribersListTableProps {
@@ -99,6 +103,7 @@ export function SubscribersListTable({
   onGoCustomization,
 }: SubscribersListTableProps) {
   const [triggeringId, setTriggeringId] = useState<string | null>(null);
+  const isPriceDrop = listType === 'price_drop';
   const statusFilter: 'all' | 'waiting' | 'notified' =
     listStateFilter === 'waiting' || listStateFilter === 'notified' ? listStateFilter : 'all';
   const setStatusFilter = (next: 'all' | 'waiting' | 'notified') => {
@@ -159,8 +164,10 @@ export function SubscribersListTable({
       {waitingCount > 0 && (
         <div
           style={{
-            background: 'linear-gradient(135deg, #EFF6FF 0%, #F5F3FF 100%)',
-            border: '1px solid #DBEAFE',
+            background: isPriceDrop
+              ? 'linear-gradient(135deg, #EFF6FF 0%, #F0FDF4 100%)'
+              : 'linear-gradient(135deg, #EFF6FF 0%, #F5F3FF 100%)',
+            border: isPriceDrop ? '1px solid #BFDBFE' : '1px solid #DBEAFE',
             borderRadius: '12px',
             padding: '16px 20px',
             display: 'flex',
@@ -170,29 +177,17 @@ export function SubscribersListTable({
           }}
         >
           <Box verticalAlign="middle" gap="SP3">
-            <div
-              style={{
-                width: '40px',
-                height: '40px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, #2563EB 0%, #4F46E5 100%)',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 10px rgba(37, 99, 235, 0.25)',
-                flexShrink: 0,
-              }}
-            >
-              <Sparkles size="20" />
-            </div>
+            <MonoIconBadge tone="blue" size={40} radius={10}>
+              {isPriceDrop ? <Tag size="20" /> : <Sparkles size="20" />}
+            </MonoIconBadge>
             <Box direction="vertical" gap="2px">
               <Text weight="bold" size="medium">
-                High Restock Demand Detected
+                {isPriceDrop ? 'Active Price Watch Demand' : 'High Restock Demand Detected'}
               </Text>
               <Text size="small" secondary>
-                {waitingCount} prospective shopper{waitingCount > 1 ? 's are' : ' is'} waiting to
-                purchase. Replenishing items will immediately trigger automatic notifications.
+                {isPriceDrop
+                  ? `${waitingCount} prospective shopper${waitingCount > 1 ? 's are' : ' is'} tracking price drops. Discounting items will automatically trigger alert notifications.`
+                  : `${waitingCount} prospective shopper${waitingCount > 1 ? 's are' : ' is'} waiting to purchase. Replenishing items will immediately trigger automatic notifications.`}
               </Text>
             </Box>
           </Box>
@@ -201,7 +196,9 @@ export function SubscribersListTable({
             prefixIcon={<SendSmall />}
             onClick={handleTriggerAllWaiting}
           >
-            Notify all waiting ({waitingCount})
+            {isPriceDrop
+              ? `Notify all watchers (${waitingCount})`
+              : `Notify all waiting (${waitingCount})`}
           </Button>
         </div>
       )}
@@ -223,33 +220,20 @@ export function SubscribersListTable({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(59, 130, 246, 0.25)',
-              flexShrink: 0,
-            }}
-          >
-            <Email size="20" />
-          </div>
+          <MonoIconBadge tone="blue" size={44} radius={10}>
+            {isPriceDrop ? <Tag size="20" /> : <Email size="20" />}
+          </MonoIconBadge>
           <div>
             <div style={{ fontSize: '24px', fontWeight: 700, color: '#0F172A', lineHeight: '1.1' }}>
               {totalShown}
             </div>
             <div style={{ fontSize: '12px', color: '#64748B', marginTop: '4px' }}>
-              Total Subscribers
+              {isPriceDrop ? 'Total Watchers' : 'Total Subscribers'}
             </div>
           </div>
         </div>
 
-        {/* Metric 2: Pending Restock */}
+        {/* Metric 2: Pending Restock or Active Monitoring */}
         <div
           style={{
             flex: 1,
@@ -264,28 +248,15 @@ export function SubscribersListTable({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(245, 158, 11, 0.25)',
-              flexShrink: 0,
-            }}
-          >
-            <DateAndTime size="20" />
-          </div>
+          <MonoIconBadge tone={isPriceDrop ? 'indigo' : 'amber'} size={44} radius={10}>
+            {isPriceDrop ? <Tag size="20" /> : <DateAndTime size="20" />}
+          </MonoIconBadge>
           <div>
             <div style={{ fontSize: '24px', fontWeight: 700, color: '#0F172A', lineHeight: '1.1' }}>
               {waitingCount}
             </div>
             <div style={{ fontSize: '12px', color: '#64748B', marginTop: '4px' }}>
-              Awaiting Restock
+              {isPriceDrop ? 'Active Price Watches' : 'Awaiting Restock'}
             </div>
           </div>
         </div>
@@ -305,22 +276,9 @@ export function SubscribersListTable({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(16, 185, 129, 0.25)',
-              flexShrink: 0,
-            }}
-          >
+          <MonoIconBadge tone="emerald" size={44} radius={10}>
             <Check size="20" />
-          </div>
+          </MonoIconBadge>
           <div>
             <div style={{ fontSize: '24px', fontWeight: 700, color: '#0F172A', lineHeight: '1.1' }}>
               {notifiedCount}
@@ -336,8 +294,12 @@ export function SubscribersListTable({
       <Card>
         {/* Card Header with Category Navigation and Export */}
         <Card.Header
-          title="Subscriber Directory"
-          subtitle="Real-time opt-in waitlist from storefront widgets"
+          title={isPriceDrop ? 'Price Watch Directory' : 'Subscriber Directory'}
+          subtitle={
+            isPriceDrop
+              ? 'Real-time shoppers tracking price drops from storefront widgets'
+              : 'Real-time opt-in waitlist from storefront widgets'
+          }
           suffix={
             <Button
               size="small"
@@ -469,7 +431,12 @@ export function SubscribersListTable({
                       padding: '4px 10px',
                       borderRadius: '6px',
                       backgroundColor: statusFilter === 'waiting' ? '#FFFFFF' : 'transparent',
-                      color: statusFilter === 'waiting' ? '#B45309' : '#64748B',
+                      color:
+                        statusFilter === 'waiting'
+                          ? isPriceDrop
+                            ? '#0369A1'
+                            : '#B45309'
+                          : '#64748B',
                       fontWeight: statusFilter === 'waiting' ? 600 : 500,
                       fontSize: '12px',
                       cursor: 'pointer',
@@ -477,7 +444,7 @@ export function SubscribersListTable({
                         statusFilter === 'waiting' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
                     }}
                   >
-                    Waiting ({waitingCount})
+                    {isPriceDrop ? 'Monitoring' : 'Waiting'} ({waitingCount})
                   </button>
                   <button
                     type="button"
@@ -579,12 +546,16 @@ export function SubscribersListTable({
                 title={
                   listSearch
                     ? 'No matching subscribers found'
-                    : 'No shoppers in this waitlist yet'
+                    : isPriceDrop
+                      ? 'No price watch subscribers yet'
+                      : 'No shoppers in this waitlist yet'
                 }
                 subtitle={
                   listSearch
                     ? 'Try searching with another email, product name, or SKU.'
-                    : 'Customers who opt in on out-of-stock product pages or price watch widgets will appear here automatically.'
+                    : isPriceDrop
+                      ? 'Shoppers who opt in on product pages to track price drops will appear here automatically.'
+                      : 'Customers who opt in on out-of-stock product pages will appear here automatically.'
                 }
                 skin="section"
               >
@@ -602,182 +573,419 @@ export function SubscribersListTable({
             ) : (
               <Table
                 data={filteredItems}
-                columns={[
-                  {
-                    title: (
-                      <Checkbox
-                        checked={isAllSelected}
-                        onChange={toggleSelectAll}
-                      />
-                    ),
-                    width: '44px',
-                    render: (row: SubscriberItem) => (
-                      <Checkbox
-                        checked={selectedSubs.includes(row._id)}
-                        onChange={() => toggleSelectRow(row._id)}
-                      />
-                    ),
-                  },
-                  {
-                    title: 'Subscriber',
-                    width: '36%',
-                    render: (row: SubscriberItem) => (
-                      <Box verticalAlign="middle" gap="SP2">
-                        {/* Vibrant Deterministic Avatar */}
-                        <div
-                          style={{
-                            width: '36px',
-                            height: '36px',
-                            borderRadius: '10px',
-                            background: getAvatarGradient(row.email),
-                            color: '#FFFFFF',
-                            fontWeight: 700,
-                            fontSize: '12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flexShrink: 0,
-                            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
-                          }}
-                        >
-                          {getInitials(row.email)}
-                        </div>
-                        <Box direction="vertical" gap="2px">
-                          <span
-                            style={{
-                              fontWeight: 600,
-                              fontSize: '13px',
-                              color: '#0F172A',
-                            }}
-                          >
-                            {row.email}
-                          </span>
-                          <span style={{ fontSize: '11px', color: '#64748B' }}>
-                            {row.createdAt
-                              ? `Joined on ${new Date(row.createdAt).toLocaleDateString()}`
-                              : 'Subscribed via Storefront'}
-                          </span>
-                        </Box>
-                      </Box>
-                    ),
-                  },
-                  {
-                    title: 'Tracked Product',
-                    width: '28%',
-                    render: (row: SubscriberItem) => (
-                      <Box verticalAlign="middle" gap="SP2">
-                        <div
-                          style={{
-                            width: '32px',
-                            height: '32px',
-                            borderRadius: '8px',
-                            backgroundColor: '#F8FAFC',
-                            border: '1px solid #E2E8F0',
-                            color: '#475569',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flexShrink: 0,
-                          }}
-                        >
-                          <Package size="16" />
-                        </div>
-                        <Box direction="vertical" gap="2px">
-                          <span
-                            style={{
-                              fontWeight: 600,
-                              fontSize: '13px',
-                              color: '#1E293B',
-                            }}
-                          >
-                            {row.productName || 'Unknown Product'}
-                          </span>
-                          {row.productId ? (
-                            <span style={{ fontSize: '11px', color: '#94A3B8' }}>
-                              ID: {row.productId}
-                            </span>
-                          ) : null}
-                        </Box>
-                      </Box>
-                    ),
-                  },
-                  {
-                    title: 'Status',
-                    width: '18%',
-                    render: (row: SubscriberItem) => {
-                      const st = (row.state || 'waiting').toLowerCase();
-                      const isNotified = st === 'notified';
-                      const isPending = st === 'pending';
+                columns={
+                  isPriceDrop
+                    ? [
+                        {
+                          title: (
+                            <Checkbox
+                              checked={isAllSelected}
+                              onChange={toggleSelectAll}
+                            />
+                          ),
+                          width: '44px',
+                          render: (row: SubscriberItem) => (
+                            <Checkbox
+                              checked={selectedSubs.includes(row._id)}
+                              onChange={() => toggleSelectRow(row._id)}
+                            />
+                          ),
+                        },
+                        {
+                          title: 'Subscriber',
+                          width: '28%',
+                          render: (row: SubscriberItem) => {
+                            const dateVal = row.createdAt || (row as any)._createdDate;
+                            return (
+                              <Box verticalAlign="middle" gap="SP2">
+                                <div
+                                  style={{
+                                    width: '36px',
+                                    height: '36px',
+                                    borderRadius: '10px',
+                                    background: getAvatarGradient(row.email),
+                                    color: '#FFFFFF',
+                                    fontWeight: 700,
+                                    fontSize: '12px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    flexShrink: 0,
+                                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
+                                  }}
+                                >
+                                  {getInitials(row.email)}
+                                </div>
+                                <Box direction="vertical" gap="2px">
+                                  <span
+                                    style={{
+                                      fontWeight: 600,
+                                      fontSize: '13px',
+                                      color: '#0F172A',
+                                    }}
+                                  >
+                                    {row.email}
+                                  </span>
+                                  <span style={{ fontSize: '11px', color: '#64748B' }}>
+                                    {dateVal
+                                      ? `Joined on ${new Date(dateVal).toLocaleDateString()}`
+                                      : 'Subscribed via Storefront'}
+                                  </span>
+                                </Box>
+                              </Box>
+                            );
+                          },
+                        },
+                        {
+                          title: 'Tracked Product',
+                          width: '24%',
+                          render: (row: SubscriberItem) => (
+                            <Box verticalAlign="middle" gap="SP2">
+                              <div
+                                style={{
+                                  width: '32px',
+                                  height: '32px',
+                                  borderRadius: '8px',
+                                  backgroundColor: '#F8FAFC',
+                                  border: '1px solid #E2E8F0',
+                                  color: '#475569',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <Package size="16" />
+                              </div>
+                              <Box direction="vertical" gap="2px">
+                                <span
+                                  style={{
+                                    fontWeight: 600,
+                                    fontSize: '13px',
+                                    color: '#1E293B',
+                                  }}
+                                >
+                                  {row.productName || 'Unknown Product'}
+                                </span>
+                                {row.productId ? (
+                                  <span style={{ fontSize: '11px', color: '#94A3B8' }}>
+                                    ID: {row.productId}
+                                  </span>
+                                ) : null}
+                              </Box>
+                            </Box>
+                          ),
+                        },
+                        {
+                          title: 'Watched Price',
+                          width: '18%',
+                          render: (row: SubscriberItem) => {
+                            const watched =
+                              row.watchedPrice != null && Number(row.watchedPrice) > 0
+                                ? Number(row.watchedPrice)
+                                : null;
+                            const current =
+                              row.currentPrice != null && Number(row.currentPrice) > 0
+                                ? Number(row.currentPrice)
+                                : null;
+                            const hasDropped =
+                              watched != null && current != null && current < watched;
 
-                      return (
-                        <div
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            padding: '4px 10px',
-                            borderRadius: '20px',
-                            fontSize: '12px',
-                            fontWeight: 600,
-                            backgroundColor: isNotified
-                              ? '#ECFDF5'
-                              : isPending
-                                ? '#EFF6FF'
-                                : '#FFFBEB',
-                            color: isNotified
-                              ? '#065F46'
-                              : isPending
-                                ? '#1D4ED8'
-                                : '#B45309',
-                            border: isNotified
-                              ? '1px solid #A7F3D0'
-                              : isPending
-                                ? '1px solid #BFDBFE'
-                                : '1px solid #FDE68A',
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: '6px',
-                              height: '6px',
-                              borderRadius: '50%',
-                              backgroundColor: isNotified
-                                ? '#10B981'
-                                : isPending
-                                  ? '#3B82F6'
-                                  : '#F59E0B',
-                              boxShadow: isNotified
-                                ? '0 0 0 2px rgba(16, 185, 129, 0.25)'
-                                : isPending
-                                  ? '0 0 0 2px rgba(59, 130, 246, 0.25)'
-                                  : '0 0 0 2px rgba(245, 158, 11, 0.25)',
-                            }}
-                          />
-                          {isNotified
-                            ? 'Alert Sent'
-                            : isPending
-                              ? 'Dispatched'
-                              : 'Waiting for Stock'}
-                        </div>
-                      );
-                    },
-                  },
-                  {
-                    title: 'Action',
-                    width: '18%',
-                    render: (row: SubscriberItem) => (
-                      <Button
-                        size="small"
-                        priority="secondary"
-                        prefixIcon={<SendSmall />}
-                        disabled={triggeringId === row._id}
-                        onClick={() => handleSingleTrigger(row.productId, row._id)}
-                      >
-                        {triggeringId === row._id ? 'Sending…' : 'Trigger alert'}
-                      </Button>
-                    ),
-                  },
-                ]}
+                            return (
+                              <Box direction="vertical" gap="2px">
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span
+                                    style={{
+                                      fontWeight: 700,
+                                      fontSize: '13px',
+                                      color: '#0F172A',
+                                    }}
+                                  >
+                                    {watched != null ? `$${watched.toFixed(2)}` : 'Any Drop'}
+                                  </span>
+                                  {hasDropped ? (
+                                    <span
+                                      style={{
+                                        fontSize: '10px',
+                                        fontWeight: 700,
+                                        color: '#059669',
+                                        backgroundColor: '#ECFDF5',
+                                        padding: '1px 5px',
+                                        borderRadius: '4px',
+                                        border: '1px solid #A7F3D0',
+                                      }}
+                                    >
+                                      Price Dropped!
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <span style={{ fontSize: '11px', color: '#64748B' }}>
+                                  {current != null
+                                    ? `Current: $${current.toFixed(2)}`
+                                    : watched != null
+                                      ? 'Target price'
+                                      : 'Alert on discount'}
+                                </span>
+                              </Box>
+                            );
+                          },
+                        },
+                        {
+                          title: 'Alert Status',
+                          width: '16%',
+                          render: (row: SubscriberItem) => {
+                            const st = (row.state || 'waiting').toLowerCase();
+                            const isNotified = st === 'notified';
+                            const isPending = st === 'pending';
+
+                            return (
+                              <div
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  padding: '4px 10px',
+                                  borderRadius: '20px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  backgroundColor: isNotified
+                                    ? '#ECFDF5'
+                                    : isPending
+                                      ? '#EFF6FF'
+                                      : '#F0F9FF',
+                                  color: isNotified
+                                    ? '#065F46'
+                                    : isPending
+                                      ? '#1D4ED8'
+                                      : '#0369A1',
+                                  border: isNotified
+                                    ? '1px solid #A7F3D0'
+                                    : isPending
+                                      ? '1px solid #BFDBFE'
+                                      : '1px solid #BAE6FD',
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    width: '6px',
+                                    height: '6px',
+                                    borderRadius: '50%',
+                                    backgroundColor: isNotified
+                                      ? '#10B981'
+                                      : isPending
+                                        ? '#3B82F6'
+                                        : '#0284C7',
+                                    boxShadow: isNotified
+                                      ? '0 0 0 2px rgba(16, 185, 129, 0.25)'
+                                      : isPending
+                                        ? '0 0 0 2px rgba(59, 130, 246, 0.25)'
+                                        : '0 0 0 2px rgba(2, 132, 199, 0.25)',
+                                  }}
+                                />
+                                {isNotified
+                                  ? 'Alert Sent'
+                                  : isPending
+                                    ? 'Dispatched'
+                                    : 'Monitoring'}
+                              </div>
+                            );
+                          },
+                        },
+                        {
+                          title: 'Action',
+                          width: '14%',
+                          render: (row: SubscriberItem) => (
+                            <Button
+                              size="small"
+                              priority="secondary"
+                              prefixIcon={<SendSmall />}
+                              disabled={triggeringId === row._id}
+                              onClick={() => handleSingleTrigger(row.productId, row._id)}
+                            >
+                              {triggeringId === row._id ? 'Sending…' : 'Trigger alert'}
+                            </Button>
+                          ),
+                        },
+                      ]
+                    : [
+                        {
+                          title: (
+                            <Checkbox
+                              checked={isAllSelected}
+                              onChange={toggleSelectAll}
+                            />
+                          ),
+                          width: '44px',
+                          render: (row: SubscriberItem) => (
+                            <Checkbox
+                              checked={selectedSubs.includes(row._id)}
+                              onChange={() => toggleSelectRow(row._id)}
+                            />
+                          ),
+                        },
+                        {
+                          title: 'Subscriber',
+                          width: '36%',
+                          render: (row: SubscriberItem) => {
+                            const dateVal = row.createdAt || (row as any)._createdDate;
+                            return (
+                              <Box verticalAlign="middle" gap="SP2">
+                                <div
+                                  style={{
+                                    width: '36px',
+                                    height: '36px',
+                                    borderRadius: '10px',
+                                    background: getAvatarGradient(row.email),
+                                    color: '#FFFFFF',
+                                    fontWeight: 700,
+                                    fontSize: '12px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    flexShrink: 0,
+                                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
+                                  }}
+                                >
+                                  {getInitials(row.email)}
+                                </div>
+                                <Box direction="vertical" gap="2px">
+                                  <span
+                                    style={{
+                                      fontWeight: 600,
+                                      fontSize: '13px',
+                                      color: '#0F172A',
+                                    }}
+                                  >
+                                    {row.email}
+                                  </span>
+                                  <span style={{ fontSize: '11px', color: '#64748B' }}>
+                                    {dateVal
+                                      ? `Joined on ${new Date(dateVal).toLocaleDateString()}`
+                                      : 'Subscribed via Storefront'}
+                                  </span>
+                                </Box>
+                              </Box>
+                            );
+                          },
+                        },
+                        {
+                          title: 'Tracked Product',
+                          width: '28%',
+                          render: (row: SubscriberItem) => (
+                            <Box verticalAlign="middle" gap="SP2">
+                              <div
+                                style={{
+                                  width: '32px',
+                                  height: '32px',
+                                  borderRadius: '8px',
+                                  backgroundColor: '#F8FAFC',
+                                  border: '1px solid #E2E8F0',
+                                  color: '#475569',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <Package size="16" />
+                              </div>
+                              <Box direction="vertical" gap="2px">
+                                <span
+                                  style={{
+                                    fontWeight: 600,
+                                    fontSize: '13px',
+                                    color: '#1E293B',
+                                  }}
+                                >
+                                  {row.productName || 'Unknown Product'}
+                                </span>
+                                {row.productId ? (
+                                  <span style={{ fontSize: '11px', color: '#94A3B8' }}>
+                                    ID: {row.productId}
+                                  </span>
+                                ) : null}
+                              </Box>
+                            </Box>
+                          ),
+                        },
+                        {
+                          title: 'Status',
+                          width: '18%',
+                          render: (row: SubscriberItem) => {
+                            const st = (row.state || 'waiting').toLowerCase();
+                            const isNotified = st === 'notified';
+                            const isPending = st === 'pending';
+
+                            return (
+                              <div
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  padding: '4px 10px',
+                                  borderRadius: '20px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  backgroundColor: isNotified
+                                    ? '#ECFDF5'
+                                    : isPending
+                                      ? '#EFF6FF'
+                                      : '#FFFBEB',
+                                  color: isNotified
+                                    ? '#065F46'
+                                    : isPending
+                                      ? '#1D4ED8'
+                                      : '#B45309',
+                                  border: isNotified
+                                    ? '1px solid #A7F3D0'
+                                    : isPending
+                                      ? '1px solid #BFDBFE'
+                                      : '1px solid #FDE68A',
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    width: '6px',
+                                    height: '6px',
+                                    borderRadius: '50%',
+                                    backgroundColor: isNotified
+                                      ? '#10B981'
+                                      : isPending
+                                        ? '#3B82F6'
+                                        : '#F59E0B',
+                                    boxShadow: isNotified
+                                      ? '0 0 0 2px rgba(16, 185, 129, 0.25)'
+                                      : isPending
+                                        ? '0 0 0 2px rgba(59, 130, 246, 0.25)'
+                                        : '0 0 0 2px rgba(245, 158, 11, 0.25)',
+                                  }}
+                                />
+                                {isNotified
+                                  ? 'Alert Sent'
+                                  : isPending
+                                    ? 'Dispatched'
+                                    : 'Waiting for Stock'}
+                              </div>
+                            );
+                          },
+                        },
+                        {
+                          title: 'Action',
+                          width: '18%',
+                          render: (row: SubscriberItem) => (
+                            <Button
+                              size="small"
+                              priority="secondary"
+                              prefixIcon={<SendSmall />}
+                              disabled={triggeringId === row._id}
+                              onClick={() => handleSingleTrigger(row.productId, row._id)}
+                            >
+                              {triggeringId === row._id ? 'Sending…' : 'Trigger alert'}
+                            </Button>
+                          ),
+                        },
+                      ]
+                }
               >
                 <Table.Content />
               </Table>

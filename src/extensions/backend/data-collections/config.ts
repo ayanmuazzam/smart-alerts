@@ -32,11 +32,8 @@ export default {
       objectOptions: { fields: [] },
     },
     { type: 'NUMBER', key: 'monthlyAlertQuota', displayName: 'Monthly Alert Quota' },
-    { type: 'NUMBER', key: 'priceDropCooldownHours', displayName: 'Price Drop Cooldown Hours' },
-    { type: 'TEXT', key: 'digestFrequency', displayName: 'Digest Frequency' },
     { type: 'TEXT', key: 'sellerEmail', displayName: 'Seller Email' },
     { type: 'NUMBER', key: 'globalLowStockThreshold', displayName: 'Global Low Stock Threshold' },
-    { type: 'DATETIME', key: 'lastDigestAt', displayName: 'Last Digest At' },
     { type: 'TEXT', key: 'publicAppBaseUrl', displayName: 'Public App Base URL' },
     {
       type: 'OBJECT',

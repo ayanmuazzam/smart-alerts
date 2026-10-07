@@ -24,6 +24,7 @@ export function LiveEmailPreview({
   signoffText,
   footerDisclaimer,
   primaryColor = '#2563eb',
+  secondaryColor = '#1D4ED8',
   logoUrl,
   layout = 'Centered',
 }: {
@@ -45,6 +46,7 @@ export function LiveEmailPreview({
   signoffText?: string;
   footerDisclaimer?: string;
   primaryColor?: string;
+  secondaryColor?: string;
   logoUrl?: string;
   layout?: string;
 }) {
@@ -359,7 +361,7 @@ export function LiveEmailPreview({
                     <h3 style={{ fontSize: '16.5px', fontWeight: 700, margin: '0 0 4px 0', color: '#111827' }}>
                       The Minimalist Leather Tote
                     </h3>
-                    <p style={{ fontSize: '15px', color: '#059669', fontWeight: 700, margin: '0 0 8px 0' }}>
+                    <p style={{ fontSize: '15px', color: secondaryColor, fontWeight: 700, margin: '0 0 8px 0' }}>
                       $140.00
                     </p>
                     {reviewQuote && (
@@ -461,23 +463,10 @@ export function LiveEmailPreview({
                   lineHeight: '1.5',
                 }}
               >
-                <p style={{ margin: '0 0 6px 0' }}>
+                <p style={{ margin: 0 }}>
                   {renderPreviewTokens(
                     footerDisclaimer || 'You received this email because you signed up for alerts.',
                   )}
-                </p>
-                <p style={{ margin: 0 }}>
-                  <a href="#unsub" onClick={(e) => e.preventDefault()} style={{ color: '#6B7280', textDecoration: 'underline' }}>
-                    Unsubscribe
-                  </a>
-                  {' • '}
-                  <a href="#pref" onClick={(e) => e.preventDefault()} style={{ color: '#6B7280', textDecoration: 'underline' }}>
-                    Manage Preferences
-                  </a>
-                  {' • '}
-                  <a href="#browser" onClick={(e) => e.preventDefault()} style={{ color: '#6B7280', textDecoration: 'underline' }}>
-                    View in Browser
-                  </a>
                 </p>
               </div>
             </div>

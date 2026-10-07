@@ -23,6 +23,7 @@ import {
   SettingsSmall,
   SearchSmall,
 } from '@wix/wix-ui-icons-common';
+import { MonoIconBadge } from './MonoIconBadge';
 
 export interface AlertHistoryItem {
   _id: string;
@@ -34,6 +35,8 @@ export interface AlertHistoryItem {
   errorMessage?: string;
 }
 
+export type AlertChannelFilter = 'all' | 'email' | 'whatsapp' | 'failed';
+
 export interface LogsAndQuotaWorkspaceProps {
   quota: any;
   alerts: AlertHistoryItem[];
@@ -44,6 +47,11 @@ export interface LogsAndQuotaWorkspaceProps {
   onDeleteSelectedAlerts: () => Promise<void>;
   onClearAllAlerts: () => Promise<void>;
   onGoSettings: () => void;
+  /** Server-side search (debounced by parent). */
+  search: string;
+  onSearchChange: (value: string) => void;
+  channelFilter: AlertChannelFilter;
+  onChannelFilterChange: (value: AlertChannelFilter) => void;
 }
 
 const FONT_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -84,9 +92,11 @@ export function LogsAndQuotaWorkspace({
   onDeleteSelectedAlerts,
   onClearAllAlerts,
   onGoSettings,
+  search,
+  onSearchChange,
+  channelFilter,
+  onChannelFilterChange,
 }: LogsAndQuotaWorkspaceProps) {
-  const [search, setSearch] = useState('');
-  const [channelFilter, setChannelFilter] = useState<'all' | 'email' | 'whatsapp' | 'failed'>('all');
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Quota computations
@@ -95,7 +105,7 @@ export function LogsAndQuotaWorkspace({
   const quotaUsed = Number(quota?.used ?? Math.max(0, quotaTotal - quotaRemaining));
   const quotaPercent = Math.min(100, Math.round((quotaUsed / (quotaTotal || 1)) * 100));
 
-  // Counts
+  // Page-level counts (server already filtered the list)
   const emailCount = alerts.filter(
     (a) => !a.channel || String(a.channel).toLowerCase() === 'email',
   ).length;
@@ -107,23 +117,7 @@ export function LogsAndQuotaWorkspace({
     return s === 'failed' || s === 'error';
   }).length;
 
-  // Filter alerts by search & channel
-  const filteredAlerts = alerts.filter((item) => {
-    const s = (item.status || '').toLowerCase();
-    const c = (item.channel || 'email').toLowerCase();
-
-    if (channelFilter === 'email' && c !== 'email') return false;
-    if (channelFilter === 'whatsapp' && c !== 'whatsapp') return false;
-    if (channelFilter === 'failed' && s !== 'failed' && s !== 'error') return false;
-
-    if (!search) return true;
-    const term = search.toLowerCase();
-    return (
-      (item.to || '').toLowerCase().includes(term) ||
-      (item.alertType || '').toLowerCase().includes(term) ||
-      (item.channel || '').toLowerCase().includes(term)
-    );
-  });
+  const filteredAlerts = alerts;
 
   const isAllSelected =
     filteredAlerts.length > 0 &&
@@ -180,22 +174,9 @@ export function LogsAndQuotaWorkspace({
         }}
       >
         <Box verticalAlign="middle" gap="SP3">
-          <div
-            style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(59, 130, 246, 0.28)',
-              flexShrink: 0,
-            }}
-          >
-            <DateAndTime size="20" />
-          </div>
+          <MonoIconBadge tone="blue" size={40} radius={10}>
+              <DateAndTime size="20" />
+            </MonoIconBadge>
           <Box direction="vertical" gap="2px">
             <Text weight="bold" size="medium">
               Notification Quota &amp; Audit Logs
@@ -250,22 +231,9 @@ export function LogsAndQuotaWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(59, 130, 246, 0.25)',
-              flexShrink: 0,
-            }}
-          >
-            <Sparkles size="20" />
-          </div>
+          <MonoIconBadge tone="blue" size={44} radius={10}>
+              <Sparkles size="20" />
+            </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: FONT_SANS }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1 }}>
               {quotaTotal.toLocaleString()}
@@ -291,22 +259,9 @@ export function LogsAndQuotaWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(16, 185, 129, 0.25)',
-              flexShrink: 0,
-            }}
-          >
-            <Check size="20" />
-          </div>
+          <MonoIconBadge tone="emerald" size={44} radius={10}>
+              <Check size="20" />
+            </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: FONT_SANS }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1 }}>
               {quotaUsed.toLocaleString()}
@@ -332,22 +287,9 @@ export function LogsAndQuotaWorkspace({
             gap: '14px',
           }}
         >
-          <div
-            style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%)',
-              color: '#FFFFFF',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 10px rgba(139, 92, 246, 0.25)',
-              flexShrink: 0,
-            }}
-          >
-            <DateAndTime size="20" />
-          </div>
+          <MonoIconBadge tone="violet" size={44} radius={10}>
+              <DateAndTime size="20" />
+            </MonoIconBadge>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontFamily: FONT_SANS }}>
             <span style={{ fontSize: '22px', fontWeight: 700, color: '#0F172A', lineHeight: 1.1 }}>
               {quotaRemaining.toLocaleString()}
@@ -469,7 +411,7 @@ export function LogsAndQuotaWorkspace({
               >
                 <button
                   type="button"
-                  onClick={() => setChannelFilter('all')}
+                  onClick={() => onChannelFilterChange('all')}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -494,7 +436,7 @@ export function LogsAndQuotaWorkspace({
 
                 <button
                   type="button"
-                  onClick={() => setChannelFilter('email')}
+                  onClick={() => onChannelFilterChange('email')}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -519,7 +461,7 @@ export function LogsAndQuotaWorkspace({
 
                 <button
                   type="button"
-                  onClick={() => setChannelFilter('whatsapp')}
+                  onClick={() => onChannelFilterChange('whatsapp')}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -545,7 +487,7 @@ export function LogsAndQuotaWorkspace({
                 {failedCount > 0 && (
                   <button
                     type="button"
-                    onClick={() => setChannelFilter('failed')}
+                    onClick={() => onChannelFilterChange('failed')}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -576,10 +518,10 @@ export function LogsAndQuotaWorkspace({
                   size="small"
                   prefix={<SearchSmall />}
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => onSearchChange(e.target.value)}
                   placeholder="Search recipient or type..."
                   clearButton
-                  onClear={() => setSearch('')}
+                  onClear={() => onSearchChange('')}
                 />
               </Box>
             </Box>

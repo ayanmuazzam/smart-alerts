@@ -8,7 +8,6 @@ import {
   Modal,
   NumberInput,
   SectionHelper,
-  SegmentedToggle,
   Text,
 } from '@wix/design-system';
 import { EditSmall } from '@wix/wix-ui-icons-common';
@@ -38,57 +37,9 @@ export function ModuleRulesSidePanel({
 
   const triggers = config?.triggerRules || {};
   const appearance = config?.appearance || {};
-  const limits = config?.notificationLimits || {};
-
-  const currentBatchMode = limits.batchMode || 'immediate';
-  const currentDigestFreq = config?.digestFrequency || 'weekly';
 
   const content = (
     <Box direction="vertical" gap="SP4">
-      {moduleKey === 'backInStock' && (
-        <>
-          <SectionHelper appearance="standard" title="Trigger rule">
-            Subscribers will be alerted when new stock is added to the store catalog.
-          </SectionHelper>
-
-          <FormField
-            label="Minimum restock quantity to trigger"
-            infoContent="Shoppers won't be notified if restocked amount is less than this value."
-          >
-            <NumberInput
-              min={1}
-              value={Number(triggers.backInStockMinQty ?? 1)}
-              suffix={<Input.Affix>units</Input.Affix>}
-              onChange={(val) =>
-                onChange({
-                  triggerRules: { ...triggers, backInStockMinQty: Number(val ?? 1) },
-                })
-              }
-            />
-          </FormField>
-
-          <FormField
-            label="Delivery dispatch mode"
-            infoContent="Send emails instantly as soon as stock updates, or bundle into an hourly batch."
-          >
-            <SegmentedToggle
-              fullWidth
-              selected={currentBatchMode}
-              onClick={(_, val) =>
-                onChange({
-                  notificationLimits: { ...limits, batchMode: String(val) },
-                })
-              }
-            >
-              <SegmentedToggle.Button value="immediate">
-                Instant (Real-time)
-              </SegmentedToggle.Button>
-              <SegmentedToggle.Button value="hourly">Hourly batch</SegmentedToggle.Button>
-            </SegmentedToggle>
-          </FormField>
-        </>
-      )}
-
       {moduleKey === 'priceDrop' && (
         <>
           <SectionHelper appearance="standard" title="Trigger rule">
@@ -133,36 +84,6 @@ export function ModuleRulesSidePanel({
               }
             />
           </FormField>
-
-          <FormField
-            label="Alert cooldown period"
-            infoContent="Hours to wait before sending another price drop alert to the same recipient."
-          >
-            <NumberInput
-              min={1}
-              max={720}
-              value={Number(config?.priceDropCooldownHours ?? 24)}
-              suffix={<Input.Affix>hours</Input.Affix>}
-              onChange={(val) => onChange({ priceDropCooldownHours: Number(val ?? 24) })}
-            />
-          </FormField>
-
-          <FormField label="Delivery dispatch mode" infoContent="Send emails immediately or batch hourly.">
-            <SegmentedToggle
-              fullWidth
-              selected={currentBatchMode}
-              onClick={(_, val) =>
-                onChange({
-                  notificationLimits: { ...limits, batchMode: String(val) },
-                })
-              }
-            >
-              <SegmentedToggle.Button value="immediate">
-                Instant (Real-time)
-              </SegmentedToggle.Button>
-              <SegmentedToggle.Button value="hourly">Hourly batch</SegmentedToggle.Button>
-            </SegmentedToggle>
-          </FormField>
         </>
       )}
 
@@ -204,40 +125,6 @@ export function ModuleRulesSidePanel({
         </>
       )}
 
-      {moduleKey === 'sellerOutOfStock' && (
-        <SectionHelper appearance="standard" title="Immediate restock alert">
-          An instant notification is sent to your registered seller email whenever any product
-          inventory reaches 0.
-        </SectionHelper>
-      )}
-
-      {moduleKey === 'sellerNewOrder' && (
-        <SectionHelper appearance="standard" title="Order alert">
-          Sends an instant summary email upon new customer purchase to expedite packing and order
-          fulfillment.
-        </SectionHelper>
-      )}
-
-      {moduleKey === 'digest' && (
-        <>
-          <SectionHelper appearance="standard" title="Consolidated summary">
-            Receive periodic executive summaries detailing inventory health, out-of-stock SKUs, and
-            customer alert demand.
-          </SectionHelper>
-          <FormField label="Digest frequency">
-            <SegmentedToggle
-              fullWidth
-              selected={currentDigestFreq}
-              onClick={(_, val) => onChange({ digestFrequency: String(val) })}
-            >
-              <SegmentedToggle.Button value="weekly">Weekly</SegmentedToggle.Button>
-              <SegmentedToggle.Button value="daily">Daily</SegmentedToggle.Button>
-              <SegmentedToggle.Button value="off">Off</SegmentedToggle.Button>
-            </SegmentedToggle>
-          </FormField>
-        </>
-      )}
-
       {moduleKey === 'stockCounter' && (
         <>
           <SectionHelper appearance="standard" title="Storefront urgency">
@@ -269,7 +156,7 @@ export function ModuleRulesSidePanel({
         </SectionHelper>
       )}
 
-      {onGoCustomization ? (
+      {onGoCustomization && moduleKey !== 'manualWhatsapp' ? (
         <Box direction="vertical" gap="SP2">
           <Text weight="bold" size="small">
             Need to customize appearance?

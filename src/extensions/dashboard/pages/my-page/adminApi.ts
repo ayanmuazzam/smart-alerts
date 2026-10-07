@@ -105,30 +105,6 @@ export const MODULE_META: ModuleMetaItem[] = [
     tag: 'ASSET',
   },
   {
-    key: 'sellerNewOrder',
-    group: 'SELLER',
-    title: 'New Order Notification',
-    description: 'Send quick order alerts for faster fulfillment handling.',
-    channel: 'Email',
-    delivery: 'Instant',
-    iconName: 'AddReceipt',
-    templateKey: 'seller_new_order',
-    customizationTarget: 'email',
-    tag: 'ASSET',
-  },
-  {
-    key: 'digest',
-    group: 'SELLER',
-    title: 'Periodic Digest Summary',
-    description: 'Consolidated summary of stock movement, alerts, and demand.',
-    channel: 'Email',
-    delivery: 'Scheduled',
-    iconName: 'DateAndTime',
-    templateKey: 'digest',
-    customizationTarget: 'email',
-    tag: 'SLOW',
-  },
-  {
     key: 'stockCounter',
     group: 'URGENCY',
     title: 'Low Stock Counter ("Only X Left")',
@@ -159,7 +135,11 @@ export const TEMPLATE_VARIABLES = [
   '{product_url}',
 ];
 
-export type PrimaryTab = 'dashboard' | 'automation' | 'email' | 'storefront' | 'settings';
-export type AutomationSub = 'rules' | 'lists' | 'inventory' | 'whatsapp' | 'history';
+export type PrimaryTab =
+  | 'dashboard'
+  | 'automation'
+  | 'email'
+  | 'storefront'
+  | 'logs';
+export type AutomationSub = 'rules' | 'lists' | 'inventory' | 'whatsapp' | 'settings';
 export type CustomizationSub = 'email' | 'storefront';
-export type SettingsSub = 'general' | 'notifications' | 'triggers' | 'whatsapp' | 'sync';

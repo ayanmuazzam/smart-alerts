@@ -7,11 +7,14 @@ import { canSendAlert, countAlertsUsed } from '../../lib/smart-alerts/email';
 import { getCatalogVersion, searchProducts, upsertProductOverride } from '../../lib/smart-alerts/products';
 import {
   manualTriggerAlert,
+  ensureCatalogSeeded,
   resyncCatalogCache,
   sendTestAlert,
 } from '../../lib/smart-alerts/engine';
-import { markWhatsappSent, testWhatsappConnection } from '../../lib/smart-alerts/whatsapp';
+import { markWhatsappSent } from '../../lib/smart-alerts/whatsapp';
 import { queryAllPages } from '../../lib/smart-alerts/query-helpers';
+import { datetimeLocalToStored } from '../../lib/smart-alerts/datetime-local';
+import { getSiteTimeZone } from '../../lib/smart-alerts/site-timezone';
 import {
   COLLECTIONS,
   DEFAULT_MODULES,
@@ -23,7 +26,6 @@ import {
   DEFAULT_TRIGGER_RULES,
   DEFAULT_WHATSAPP_SETUP,
   DEFAULT_SYNC_SETTINGS,
-  PRICE_DROP_COOLDOWN_HOURS,
 } from '../../lib/smart-alerts/constants';
 
 function csvEscape(value: unknown): string {
@@ -85,10 +87,11 @@ const TRACKED_FIELDS = [
   'lastKnownPrice',
   'lastStockStatus',
   'tracked',
+  'trackedSource',
 ] as const;
 
 export const GET: APIRoute = async ({ request }) => {
-  const denied = requireDashboardAuth(request);
+  const denied = await requireDashboardAuth(request);
   if (denied) return denied;
 
   const url = new URL(request.url);
@@ -96,6 +99,7 @@ export const GET: APIRoute = async ({ request }) => {
 
   try {
     if (view === 'dashboard') {
+      await ensureCatalogSeeded('first_open');
       const config = await getOrCreateConfig();
       const quota = await canSendAlert(config);
       const query = auth.elevate(items.query);
@@ -103,8 +107,16 @@ export const GET: APIRoute = async ({ request }) => {
         query(COLLECTIONS.subscriptions).eq('subscriptionType', 'back_in_stock').eq('state', 'waiting').limit(1).find({ returnTotalCount: true }),
         query(COLLECTIONS.subscriptions).eq('subscriptionType', 'price_drop').eq('state', 'waiting').limit(1).find({ returnTotalCount: true }),
         query(COLLECTIONS.whatsappQueue).eq('status', 'pending').limit(1).find({ returnTotalCount: true }),
-        query(COLLECTIONS.subscriptions).descending('_createdDate').limit(10).find(),
-        query(COLLECTIONS.alerts).descending('sentAt').limit(10).find(),
+        query(COLLECTIONS.subscriptions)
+          .descending('_createdDate')
+          .fields('_id', 'email', 'subscriptionType', '_createdDate', 'lastNotifiedAt')
+          .limit(10)
+          .find(),
+        query(COLLECTIONS.alerts)
+          .descending('sentAt')
+          .fields('_id', 'alertType', 'to', 'status', 'sentAt')
+          .limit(10)
+          .find(),
       ]);
       const onHoldStock = bis.totalCount ?? bis.items.length;
       const watchingPrice = price.totalCount ?? price.items.length;
@@ -165,8 +177,34 @@ export const GET: APIRoute = async ({ request }) => {
       const result = await builder.skip(skip).limit(limit).find({ returnTotalCount: true });
       const totalCount = result.totalCount ?? result.items.length;
       const nextSkip = skip + result.items.length < totalCount ? skip + result.items.length : null;
+
+      let enrichedItems = result.items;
+      if (type === 'price_drop' && result.items.length > 0) {
+        const productIds = Array.from(new Set(result.items.map((i: any) => i.productId).filter(Boolean)));
+        if (productIds.length > 0) {
+          try {
+            const overrides = await query(COLLECTIONS.productOverrides)
+              .hasSome('productId', productIds)
+              .fields('productId', 'lastKnownPrice')
+              .find();
+            const priceMap = new Map<string, number>();
+            for (const o of (overrides.items || []) as any[]) {
+              if (o.productId && o.lastKnownPrice != null) {
+                priceMap.set(String(o.productId), Number(o.lastKnownPrice));
+              }
+            }
+            enrichedItems = result.items.map((item: any) => ({
+              ...item,
+              currentPrice: priceMap.get(item.productId) ?? item.watchedPrice ?? null,
+            }));
+          } catch {
+            enrichedItems = result.items;
+          }
+        }
+      }
+
       return Response.json({
-        items: result.items,
+        items: enrichedItems,
         totalCount,
         skip,
         limit,
@@ -181,7 +219,12 @@ export const GET: APIRoute = async ({ request }) => {
       let builder = query(COLLECTIONS.whatsappQueue)
         .eq('status', 'pending')
         .fields(...WA_FIELDS);
-      if (q) builder = builder.contains('phone', q);
+      if (q) {
+        // Phone-like → phone field; otherwise product name (single contains filter).
+        builder = /^\+?\d[\d\s-]{2,}$/.test(q)
+          ? builder.contains('phone', q)
+          : builder.contains('productName', q);
+      }
       const result = await builder.skip(skip).limit(limit).find({ returnTotalCount: true });
       const config = await getOrCreateConfig();
       const totalCount = result.totalCount ?? result.items.length;
@@ -203,25 +246,38 @@ export const GET: APIRoute = async ({ request }) => {
     }
 
     if (view === 'products') {
-      const q = url.searchParams.get('q') || '';
+      const q = (url.searchParams.get('q') || '').trim();
+      // Only intentional tracks: Track Product (manual) and Scan Out-of-Stock (scan).
+      const source = url.searchParams.get('source') || 'all';
+      const stock = url.searchParams.get('stock') || 'all';
       const { limit, skip } = pageParams(url, 50);
       const query = auth.elevate(items.query);
-      const tracked = await query(COLLECTIONS.productOverrides)
+
+      let builder = query(COLLECTIONS.productOverrides)
         .eq('tracked', true)
-        .fields(...TRACKED_FIELDS)
-        .skip(skip)
-        .limit(limit)
-        .find({ returnTotalCount: true });
+        .fields(...TRACKED_FIELDS);
+      if (source === 'manual' || source === 'scan') {
+        builder = builder.eq('trackedSource', source);
+      } else {
+        builder = builder.hasSome('trackedSource', ['manual', 'scan']);
+      }
+      if (stock === 'oos') {
+        builder = builder.eq('lastStockStatus', 'OUT_OF_STOCK');
+      }
+
+      const result = await builder.skip(skip).limit(limit).find({ returnTotalCount: true });
+      const totalCount = result.totalCount ?? result.items.length;
       const search = q ? await searchProducts(q) : [];
-      const totalCount = tracked.totalCount ?? tracked.items.length;
+      const siteTimeZone = await getSiteTimeZone();
       return Response.json({
-        tracked: tracked.items,
+        tracked: result.items,
         search,
         catalogVersion: await getCatalogVersion(),
+        siteTimeZone,
         totalCount,
         skip,
         limit,
-        nextSkip: skip + tracked.items.length < totalCount ? skip + tracked.items.length : null,
+        nextSkip: skip + result.items.length < totalCount ? skip + result.items.length : null,
       });
     }
 
@@ -259,7 +315,7 @@ export const GET: APIRoute = async ({ request }) => {
 };
 
 export const POST: APIRoute = async ({ request }) => {
-  const denied = requireDashboardAuth(request);
+  const denied = await requireDashboardAuth(request);
   if (denied) return denied;
 
   try {
@@ -317,8 +373,22 @@ export const POST: APIRoute = async ({ request }) => {
     }
 
     if (action === 'saveOverride') {
-      await upsertProductOverride(body);
-      return Response.json({ ok: true });
+      const siteTimeZone = await getSiteTimeZone();
+      const restockAt =
+        body.restockAt === null || body.restockAt === ''
+          ? null
+          : datetimeLocalToStored(
+              // Accept wall-clock (YYYY-MM-DDTHH:mm) or a prior ISO; strip zone and re-interpret in site TZ.
+              String(body.restockAt).replace(/\.\d{3}Z$/, '').replace(/Z$/, '').slice(0, 16),
+              siteTimeZone,
+            );
+      await upsertProductOverride({
+        ...body,
+        restockAt,
+        tracked: body.tracked !== false,
+        trackedSource: body.trackedSource === 'scan' ? 'scan' : 'manual',
+      });
+      return Response.json({ ok: true, siteTimeZone });
     }
 
     if (action === 'deleteAlerts') {
@@ -326,18 +396,28 @@ export const POST: APIRoute = async ({ request }) => {
       const ids: string[] = body.ids || [];
       if (body.all) {
         const query = auth.elevate(items.query);
-        const all = await queryAllPages(
-          (limit, skip) =>
-            query(COLLECTIONS.alerts).fields('_id').skip(skip).limit(limit).find(),
-          100,
-        );
-        for (const item of all) {
-          await remove(COLLECTIONS.alerts, String(item._id));
+        const pageSize = 50;
+        const maxBatches = Math.min(Math.max(Number(body.maxBatches) || 20, 1), 40);
+        let deleted = 0;
+        let hasMore = false;
+        for (let batch = 0; batch < maxBatches; batch += 1) {
+          const page = await query(COLLECTIONS.alerts).fields('_id').limit(pageSize).find();
+          const batchItems = page.items || [];
+          if (batchItems.length === 0) {
+            hasMore = false;
+            break;
+          }
+          for (const item of batchItems) {
+            await remove(COLLECTIONS.alerts, String(item._id));
+            deleted += 1;
+          }
+          hasMore = batchItems.length >= pageSize;
+          if (!hasMore) break;
         }
-      } else {
-        for (const id of ids) await remove(COLLECTIONS.alerts, id);
+        return Response.json({ ok: true, deleted, hasMore });
       }
-      return Response.json({ ok: true });
+      for (const id of ids) await remove(COLLECTIONS.alerts, id);
+      return Response.json({ ok: true, deleted: ids.length, hasMore: false });
     }
 
     if (action === 'deleteSubscriptions') {
@@ -354,12 +434,12 @@ export const POST: APIRoute = async ({ request }) => {
         brand: { ...DEFAULT_BRAND },
         support: { ...DEFAULT_SUPPORT },
         monthlyAlertQuota: DEFAULT_QUOTA,
-        priceDropCooldownHours: PRICE_DROP_COOLDOWN_HOURS,
-        digestFrequency: 'weekly',
         globalLowStockThreshold: 5,
-        publicAppBaseUrl: '',
-        lastDigestAt: null,
-        notificationLimits: { ...DEFAULT_NOTIFICATION_LIMITS },
+        notificationLimits: {
+          ...DEFAULT_NOTIFICATION_LIMITS,
+          batchMode: 'immediate',
+          batchHourUtc: DEFAULT_NOTIFICATION_LIMITS.batchHourUtc,
+        },
         triggerRules: { ...DEFAULT_TRIGGER_RULES },
         whatsappSetup: { ...DEFAULT_WHATSAPP_SETUP },
         syncSettings: { ...DEFAULT_SYNC_SETTINGS },
@@ -369,18 +449,27 @@ export const POST: APIRoute = async ({ request }) => {
 
     if (action === 'removeWhatsapp') {
       const remove = auth.elevate(items.remove);
-      await remove(COLLECTIONS.whatsappQueue, body.id);
-      return Response.json({ ok: true });
+      const ids: string[] = Array.isArray(body.ids)
+        ? body.ids.map(String).filter(Boolean)
+        : body.id
+          ? [String(body.id)]
+          : [];
+      for (const id of ids) {
+        await remove(COLLECTIONS.whatsappQueue, id);
+      }
+      return Response.json({ ok: true, count: ids.length });
     }
 
     if (action === 'markWhatsappSent') {
-      await markWhatsappSent(body.id);
-      return Response.json({ ok: true });
-    }
-
-    if (action === 'testWhatsappConnection') {
-      const result = await testWhatsappConnection();
-      return Response.json({ ...result, config: await getOrCreateConfig() });
+      const ids: string[] = Array.isArray(body.ids)
+        ? body.ids.map(String).filter(Boolean)
+        : body.id
+          ? [String(body.id)]
+          : [];
+      for (const id of ids) {
+        await markWhatsappSent(id);
+      }
+      return Response.json({ ok: true, count: ids.length });
     }
 
     if (action === 'testAlert') {
@@ -405,18 +494,22 @@ export const POST: APIRoute = async ({ request }) => {
     if (action === 'exportSubscribersCsv') {
       const type = body.type || 'back_in_stock';
       const query = auth.elevate(items.query);
+      const isPrice = type === 'price_drop';
+      const fields = isPrice
+        ? ['email', 'productId', 'productName', 'state', 'subscriptionType', 'watchedPrice', 'phone']
+        : ['email', 'productId', 'productName', 'state', 'subscriptionType', 'phone'];
       const rows = await queryAllPages(
         (limit, skip) =>
           query(COLLECTIONS.subscriptions)
             .eq('subscriptionType', type)
             .ne('state', 'cancelled')
-            .fields('email', 'productId', 'productName', 'state', 'subscriptionType', 'phone')
+            .fields(...fields)
             .skip(skip)
             .limit(limit)
             .find(),
         100,
       );
-      const header = ['email', 'productId', 'productName', 'state', 'subscriptionType', 'phone'];
+      const header = fields;
       const lines = [
         header.join(','),
         ...rows.map((row: any) => header.map((h) => csvEscape(row[h])).join(',')),

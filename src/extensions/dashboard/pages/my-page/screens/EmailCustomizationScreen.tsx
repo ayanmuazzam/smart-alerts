@@ -12,13 +12,13 @@ import {
   Layout,
   Text,
 } from '@wix/design-system';
+import { dashboard } from '@wix/dashboard';
 import {
   Email,
   Package,
   Tag,
   StatusAlert,
   Sparkles,
-  DateAndTime,
   SettingsSmall,
   Check,
   Edit,
@@ -65,13 +65,13 @@ type Props = {
 const FONT_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 
 const TRIGGER_TABS = [
-  { id: 'back_in_stock', label: 'Back in Stock', audience: 'Shoppers', icon: <Package size="14" /> },
-  { id: 'price_drop', label: 'Price Drop', audience: 'Shoppers', icon: <Tag size="14" /> },
-  { id: 'seller_low_stock', label: 'Low Stock', audience: 'Store Owner', icon: <StatusAlert size="14" /> },
-  { id: 'seller_oos', label: 'Out of Stock', audience: 'Store Owner', icon: <StatusAlert size="14" /> },
-  { id: 'seller_new_order', label: 'New Order', audience: 'Store Owner', icon: <Sparkles size="14" /> },
-  { id: 'digest', label: 'Weekly Digest', audience: 'Store Owner', icon: <DateAndTime size="14" /> },
+  { id: 'back_in_stock', label: 'Back in Stock', audience: 'Shoppers' as const, icon: <Package size="14" /> },
+  { id: 'price_drop', label: 'Price Drop', audience: 'Shoppers' as const, icon: <Tag size="14" /> },
+  { id: 'seller_low_stock', label: 'Low Stock', audience: 'Store Manager' as const, icon: <StatusAlert size="14" /> },
+  { id: 'seller_oos', label: 'Out of Stock', audience: 'Store Manager' as const, icon: <StatusAlert size="14" /> },
 ];
+
+const SHOPPER_ONLY_VARS = new Set(['{customer_name}']);
 
 const PRESET_COLORS = [
   { label: 'Wix Blue', hex: '#116DFF' },
@@ -116,6 +116,12 @@ export function EmailCustomizationScreen({
   const [isSavingBrand, setIsSavingBrand] = useState(false);
 
   const brand = config?.brand || {};
+  const isShopperAudience =
+    (TRIGGER_TABS.find((t) => t.id === templateForm.triggerType)?.audience || 'Shoppers') ===
+    'Shoppers';
+  const bodyVariables = isShopperAudience
+    ? TEMPLATE_VARIABLES
+    : TEMPLATE_VARIABLES.filter((v) => !SHOPPER_ONLY_VARS.has(v));
 
   // One-click quick load of the high-converting reference template
   const loadHtmlReferenceTemplate = () => {
@@ -246,14 +252,16 @@ export function EmailCustomizationScreen({
                 title="Email Template Controls"
                 subtitle="Fine-tune every visual component of your automated store alerts"
                 suffix={
-                  <Button
-                    size="small"
-                    priority="secondary"
-                    prefixIcon={<MagicWandSmall />}
-                    onClick={loadHtmlReferenceTemplate}
-                  >
-                    Load Reference Template
-                  </Button>
+                  isShopperAudience ? (
+                    <Button
+                      size="small"
+                      priority="secondary"
+                      prefixIcon={<MagicWandSmall />}
+                      onClick={loadHtmlReferenceTemplate}
+                    >
+                      Load Reference Template
+                    </Button>
+                  ) : undefined
                 }
               />
               <Card.Divider />
@@ -266,7 +274,7 @@ export function EmailCustomizationScreen({
                         Alert Trigger Event
                       </span>
                       <span style={{ fontSize: '11.5px', color: '#64748B' }}>
-                        {TRIGGER_TABS.find((t) => t.id === templateForm.triggerType)?.audience === 'Shoppers'
+                        {isShopperAudience
                           ? 'Audience: Subscribed Shoppers'
                           : 'Audience: Store Manager'}
                       </span>
@@ -507,7 +515,7 @@ export function EmailCustomizationScreen({
                           <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 600, alignSelf: 'center', marginRight: '2px' }}>
                             Insert:
                           </span>
-                          {TEMPLATE_VARIABLES.map((v) => (
+                          {bodyVariables.map((v) => (
                             <button
                               key={v}
                               type="button"
@@ -558,19 +566,25 @@ export function EmailCustomizationScreen({
                           }))
                         }
                       >
-                        Include product card (Photo, Title, Price, Status)
+                        {isShopperAudience
+                          ? 'Include product card (Photo, Title, Price, Status)'
+                          : 'Include product snapshot (Photo, Title, Price)'}
                       </Checkbox>
 
-                      <FormField
-                        label="Customer Review / Social Proof Quote"
-                        infoContent="Adding genuine social proof in restock alerts gives customers the confidence to complete checkout immediately."
-                      >
-                        <Input
-                          value={templateForm.reviewQuote || ''}
-                          onChange={(e) => setTemplateForm((f) => ({ ...f, reviewQuote: e.target.value }))}
-                          placeholder='e.g. "Literally fits my entire life and goes with every outfit." — Sarah M.'
-                        />
-                      </FormField>
+                      {isShopperAudience ? (
+                        <FormField
+                          label="Customer Review / Social Proof Quote"
+                          infoContent="Adding genuine social proof in restock alerts gives customers the confidence to complete checkout immediately."
+                        >
+                          <Input
+                            value={templateForm.reviewQuote || ''}
+                            onChange={(e) =>
+                              setTemplateForm((f) => ({ ...f, reviewQuote: e.target.value }))
+                            }
+                            placeholder='e.g. "Literally fits my entire life and goes with every outfit." — Sarah M.'
+                          />
+                        </FormField>
+                      ) : null}
 
                       <div
                         style={{
@@ -583,7 +597,18 @@ export function EmailCustomizationScreen({
                           lineHeight: '1.5',
                         }}
                       >
-                        💡 <strong>Dynamic Product Data:</strong> The actual product image, item name, and current pricing will automatically be populated from your store catalog when triggered.
+                        {isShopperAudience ? (
+                          <>
+                            💡 <strong>Dynamic Product Data:</strong> The actual product image, item
+                            name, and current pricing will automatically be populated from your store
+                            catalog when triggered.
+                          </>
+                        ) : (
+                          <>
+                            💡 <strong>Inventory context:</strong> When enabled, the alert includes
+                            the product image and name so you can identify which SKU needs attention.
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -594,55 +619,95 @@ export function EmailCustomizationScreen({
                       <FormField label="Primary CTA Button Label">
                         <Input
                           value={templateForm.buttonLabel}
-                          onChange={(e) => setTemplateForm((f) => ({ ...f, buttonLabel: e.target.value }))}
-                          placeholder="e.g. Shop Now Before It Sells Out"
+                          onChange={(e) =>
+                            setTemplateForm((f) => ({ ...f, buttonLabel: e.target.value }))
+                          }
+                          placeholder={
+                            isShopperAudience
+                              ? 'e.g. Shop Now Before It Sells Out'
+                              : 'e.g. Review Inventory'
+                          }
                         />
                       </FormField>
 
-                      <div
-                        style={{
-                          backgroundColor: '#F8FAFC',
-                          border: '1px solid #E2E8F0',
-                          borderRadius: '8px',
-                          padding: '12px',
-                        }}
-                      >
-                        <Checkbox
-                          checked={templateForm.showFeatures ?? false}
-                          onChange={() =>
-                            setTemplateForm((f) => ({
-                              ...f,
-                              showFeatures: !f.showFeatures,
-                            }))
-                          }
+                      {isShopperAudience ? (
+                        <div
+                          style={{
+                            backgroundColor: '#F8FAFC',
+                            border: '1px solid #E2E8F0',
+                            borderRadius: '8px',
+                            padding: '12px',
+                          }}
                         >
-                          Include "Why you'll love it" / Highlights List Box
-                        </Checkbox>
+                          <Checkbox
+                            checked={templateForm.showFeatures ?? false}
+                            onChange={() =>
+                              setTemplateForm((f) => ({
+                                ...f,
+                                showFeatures: !f.showFeatures,
+                              }))
+                            }
+                          >
+                            Include "Why you'll love it" / Highlights List Box
+                          </Checkbox>
 
-                        {(templateForm.showFeatures ?? false) && (
-                          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <FormField label="Highlights Box Header">
-                              <Input
-                                value={templateForm.featuresTitle || "Why you'll love it:"}
-                                onChange={(e) => setTemplateForm((f) => ({ ...f, featuresTitle: e.target.value }))}
-                                placeholder="Why you'll love it:"
-                              />
-                            </FormField>
-
-                            <FormField
-                              label="Bullet Points (One per line)"
-                              infoContent="Enter 2-4 key features, guarantees, or shipping perks."
+                          {(templateForm.showFeatures ?? false) && (
+                            <div
+                              style={{
+                                marginTop: '12px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '10px',
+                              }}
                             >
-                              <InputArea
-                                value={templateForm.featuresText || ''}
-                                onChange={(e) => setTemplateForm((f) => ({ ...f, featuresText: e.target.value }))}
-                                rows={4}
-                                placeholder="100% Full-Grain Leather: Built to last a lifetime.&#10;Padded Sleeve: Fits laptops up to 15&#34;.&#10;Fast Delivery: Free express shipping on this order."
-                              />
-                            </FormField>
-                          </div>
-                        )}
-                      </div>
+                              <FormField label="Highlights Box Header">
+                                <Input
+                                  value={templateForm.featuresTitle || "Why you'll love it:"}
+                                  onChange={(e) =>
+                                    setTemplateForm((f) => ({
+                                      ...f,
+                                      featuresTitle: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="Why you'll love it:"
+                                />
+                              </FormField>
+
+                              <FormField
+                                label="Bullet Points (One per line)"
+                                infoContent="Enter 2-4 key features, guarantees, or shipping perks."
+                              >
+                                <InputArea
+                                  value={templateForm.featuresText || ''}
+                                  onChange={(e) =>
+                                    setTemplateForm((f) => ({
+                                      ...f,
+                                      featuresText: e.target.value,
+                                    }))
+                                  }
+                                  rows={4}
+                                  placeholder="100% Full-Grain Leather: Built to last a lifetime.&#10;Padded Sleeve: Fits laptops up to 15&#34;.&#10;Fast Delivery: Free express shipping on this order."
+                                />
+                              </FormField>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            backgroundColor: '#F8FAFC',
+                            border: '1px solid #E2E8F0',
+                            borderRadius: '8px',
+                            padding: '12px',
+                            fontSize: '12px',
+                            color: '#64748B',
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          Shopper marketing blocks (reviews &amp; highlights) are hidden for store
+                          manager alerts.
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -693,7 +758,16 @@ export function EmailCustomizationScreen({
                         setIsSavingTemplate(true);
                         try {
                           await onRun(async () => {
-                            await adminPost({ action: 'saveTemplate', ...templateForm });
+                            const payload = isShopperAudience
+                              ? templateForm
+                              : {
+                                  ...templateForm,
+                                  reviewQuote: '',
+                                  showFeatures: false,
+                                  featuresTitle: '',
+                                  featuresText: '',
+                                };
+                            await adminPost({ action: 'saveTemplate', ...payload });
                             onReload();
                           }, 'Template saved');
                         } finally {
@@ -741,7 +815,7 @@ export function EmailCustomizationScreen({
             <Card>
               <Card.Header
                 title="Brand Theme &amp; Accent Palette"
-                subtitle="Configure store logo, primary brand accents, and compliance footer"
+                subtitle="Configure store logo and brand accent colors for alert emails"
               />
               <Card.Divider />
               <Card.Content>
@@ -806,10 +880,23 @@ export function EmailCustomizationScreen({
                     </div>
                   </FormField>
 
-                  <FormField label="Secondary brand accent color">
+                  <FormField
+                    label="Secondary brand accent color"
+                    infoContent="Used for product price accents in alert emails."
+                  >
                     <ColorInput
                       value={brand.secondaryColor || '#1D4ED8'}
                       onConfirm={(color) => {
+                        const hex =
+                          typeof color === 'string'
+                            ? color
+                            : (color as { hex?: string })?.hex || '#1D4ED8';
+                        setConfig((c: any) => ({
+                          ...c,
+                          brand: { ...c.brand, secondaryColor: hex },
+                        }));
+                      }}
+                      onChange={(color) => {
                         const hex =
                           typeof color === 'string'
                             ? color
@@ -823,21 +910,53 @@ export function EmailCustomizationScreen({
                   </FormField>
 
                   <FormField
-                    label="Store logo image URL"
-                    infoContent="Displayed in the header bar of all customer alert emails."
+                    label="Store logo"
+                    infoContent="Pick an image from your Wix Media Manager. Shown in the email header."
                   >
                     <Box direction="vertical" gap="8px">
-                      <Input
-                        value={brand.logoUrl || ''}
-                        onChange={(e) =>
-                          setConfig((c: any) => ({
-                            ...c,
-                            brand: { ...c.brand, logoUrl: e.target.value },
-                          }))
-                        }
-                        placeholder="https://yourstore.com/logo.png"
-                      />
-                      {brand.logoUrl && (
+                      <Box gap="8px">
+                        <Button
+                          size="small"
+                          priority="secondary"
+                          onClick={async () => {
+                            try {
+                              const chosen = await dashboard.openMediaManager({
+                                category: 'IMAGE',
+                                multiSelect: false,
+                              });
+                              const file = chosen?.items?.[0] as
+                                | { url?: string; thumbnailUrl?: string }
+                                | undefined;
+                              const url = String(file?.url || file?.thumbnailUrl || '').trim();
+                              if (!url) return;
+                              setConfig((c: any) => ({
+                                ...c,
+                                brand: { ...c.brand, logoUrl: url },
+                              }));
+                            } catch {
+                              /* user cancelled media manager */
+                            }
+                          }}
+                        >
+                          Choose from Media Manager
+                        </Button>
+                        {brand.logoUrl ? (
+                          <Button
+                            size="small"
+                            priority="secondary"
+                            skin="destructive"
+                            onClick={() =>
+                              setConfig((c: any) => ({
+                                ...c,
+                                brand: { ...c.brand, logoUrl: '' },
+                              }))
+                            }
+                          >
+                            Remove
+                          </Button>
+                        ) : null}
+                      </Box>
+                      {brand.logoUrl ? (
                         <div
                           style={{
                             display: 'flex',
@@ -852,49 +971,19 @@ export function EmailCustomizationScreen({
                           <img
                             src={brand.logoUrl}
                             alt="Logo preview"
-                            style={{ maxHeight: '32px', maxWidth: '120px', objectFit: 'contain' }}
+                            style={{ maxHeight: '40px', maxWidth: '140px', objectFit: 'contain' }}
                             onError={(e) => {
                               (e.target as HTMLElement).style.display = 'none';
                             }}
                           />
-                          <span style={{ fontSize: '11px', color: '#64748B' }}>Logo preview</span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setConfig((c: any) => ({
-                                ...c,
-                                brand: { ...c.brand, logoUrl: '' },
-                              }))
-                            }
-                            style={{
-                              marginLeft: 'auto',
-                              fontSize: '11px',
-                              color: '#EF4444',
-                              background: 'none',
-                              border: 'none',
-                              cursor: 'pointer',
-                              fontWeight: 600,
-                            }}
-                          >
-                            Clear logo
-                          </button>
+                          <span style={{ fontSize: '11px', color: '#64748B' }}>Logo selected</span>
                         </div>
+                      ) : (
+                        <Text size="tiny" secondary>
+                          No logo selected — header shows store name text instead.
+                        </Text>
                       )}
                     </Box>
-                  </FormField>
-
-                  <FormField label="Compliance &amp; footer text">
-                    <InputArea
-                      value={brand.footerText || ''}
-                      onChange={(e) =>
-                        setConfig((c: any) => ({
-                          ...c,
-                          brand: { ...c.brand, footerText: e.target.value },
-                        }))
-                      }
-                      rows={3}
-                      placeholder="You received this email because you subscribed to alerts at Your Store."
-                    />
                   </FormField>
 
                   <Button
@@ -936,14 +1025,15 @@ export function EmailCustomizationScreen({
               body={templateForm.body}
               buttonLabel={templateForm.buttonLabel}
               showProductImage={templateForm.showProductImage}
-              reviewQuote={templateForm.reviewQuote}
-              showFeatures={templateForm.showFeatures}
-              featuresTitle={templateForm.featuresTitle}
-              featuresText={templateForm.featuresText}
+              reviewQuote={isShopperAudience ? templateForm.reviewQuote : ''}
+              showFeatures={isShopperAudience ? templateForm.showFeatures : false}
+              featuresTitle={isShopperAudience ? templateForm.featuresTitle : ''}
+              featuresText={isShopperAudience ? templateForm.featuresText : ''}
               closingText={templateForm.closingText}
               signoffText={templateForm.signoffText}
               footerDisclaimer={templateForm.footerDisclaimer}
               primaryColor={brand.primaryColor || '#2563EB'}
+              secondaryColor={brand.secondaryColor || '#1D4ED8'}
               logoUrl={brand.logoUrl}
               layout={templateForm.layout || 'Centered'}
             />

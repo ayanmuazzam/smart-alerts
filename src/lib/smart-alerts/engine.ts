@@ -1,5 +1,3 @@
-import { items } from '@wix/data';
-import { auth } from '@wix/essentials';
 import {
   getOrCreateConfig,
   getLowStockThreshold,
@@ -19,11 +17,15 @@ import {
   cancelWaitingByProduct,
   findWaitingByProduct,
   markNotified,
-  rearmPriceDropWatches,
+  resetPriceDropWatch,
 } from './subscriptions';
 import { getOverride, getProductSnapshot, getFirstProductSnapshot, loadOutOfStockProducts, upsertProductOverride } from './products';
-import { COLLECTIONS, getDefaultEmailTemplate } from './constants';
-import { sendWhatsappViaTwilio } from './whatsapp';
+import { getDefaultEmailTemplate } from './constants';
+import { mapPool } from './map-pool';
+
+/** Cap fan-out per webhook event to keep handlers under time limits. */
+const NOTIFY_MAX_PER_EVENT = 200;
+const NOTIFY_CONCURRENCY = 5;
 
 async function storeIdentity(): Promise<{ storeName: string; replyTo: string }> {
   const cfg = await getOrCreateConfig();
@@ -35,12 +37,12 @@ async function storeIdentity(): Promise<{ storeName: string; replyTo: string }> 
 
 function meetsPriceDropRules(
   config: SiteConfig,
-  previousPrice: number,
+  baselinePrice: number,
   newPrice: number,
 ): boolean {
-  if (!(previousPrice > 0 && newPrice < previousPrice)) return false;
-  const dropAmount = previousPrice - newPrice;
-  const dropPercent = (dropAmount / previousPrice) * 100;
+  if (!(baselinePrice > 0 && newPrice > 0 && newPrice < baselinePrice)) return false;
+  const dropAmount = baselinePrice - newPrice;
+  const dropPercent = (dropAmount / baselinePrice) * 100;
   const minAmount = Number(config.triggerRules?.priceDropMinAmount ?? 0);
   const minPercent = Number(config.triggerRules?.priceDropMinPercent ?? 0);
   if (minAmount > 0 && dropAmount < minAmount) return false;
@@ -48,33 +50,35 @@ function meetsPriceDropRules(
   return true;
 }
 
-async function enqueuePendingSend(entry: {
-  to: string;
-  channel: string;
-  alertType: string;
-  productId?: string;
-  payload: Record<string, unknown>;
-}) {
-  const insert = auth.elevate(items.insert);
-  const config = await getOrCreateConfig();
-  const hourUtc = Math.min(23, Math.max(0, Number(config.notificationLimits?.batchHourUtc ?? 9)));
-  const scheduled = new Date();
-  scheduled.setUTCMinutes(0, 0, 0);
-  scheduled.setUTCSeconds(0, 0);
-  if (scheduled.getUTCHours() >= hourUtc) {
-    scheduled.setUTCDate(scheduled.getUTCDate() + 1);
-  }
-  scheduled.setUTCHours(hourUtc);
-  await insert(COLLECTIONS.pendingSends, {
-    title: `${entry.alertType} → ${entry.to}`,
-    to: entry.to,
-    channel: entry.channel,
-    alertType: entry.alertType,
-    productId: entry.productId || '',
-    payload: entry.payload,
-    scheduledFor: scheduled,
-    status: 'pending',
-  });
+/**
+ * Resolve product id from Catalog V1 / V3 product webhook shapes.
+ * V1 changed: { productId, changedFields } (sometimes under data).
+ * V3 updated: entityId / entity._id / updatedEvent.currentEntityAsJson.id
+ */
+function resolveProductUpdateId(event: Record<string, any>): string {
+  return String(
+    event.entity?._id ||
+      event.entity?.id ||
+      event.entityId ||
+      event.metadata?.entityId ||
+      event.productId ||
+      event.data?.productId ||
+      event.data?.product?._id ||
+      event.data?.product?.id ||
+      event.updatedEvent?.currentEntityAsJson?.id ||
+      event.data?.updatedEvent?.currentEntityAsJson?.id ||
+      '',
+  ).trim();
+}
+
+function resolveProductChangedFields(event: Record<string, any>): string[] {
+  const raw =
+    event.changedFields ||
+    event.modifiedFields ||
+    event.data?.changedFields ||
+    event.data?.modifiedFields ||
+    [];
+  return Array.isArray(raw) ? raw.map(String) : [];
 }
 
 async function deliverFromTemplate(opts: {
@@ -97,6 +101,15 @@ async function deliverFromTemplate(opts: {
       Object.entries(stored).filter(([, v]) => v !== '' && v != null),
     ),
   };
+  // Store-manager alerts never include shopper marketing blocks.
+  const isSellerAlert =
+    opts.triggerType === 'seller_low_stock' || opts.triggerType === 'seller_oos';
+  if (isSellerAlert) {
+    template.reviewQuote = '';
+    template.showFeatures = false;
+    template.featuresTitle = '';
+    template.featuresText = '';
+  }
   const identity = await storeIdentity();
   const tokens = {
     store_name: identity.storeName,
@@ -109,7 +122,7 @@ async function deliverFromTemplate(opts: {
   const headline = renderTokens(String(template.headline || defaults.headline || ''), tokens);
   const body = renderTokens(String(template.body || defaults.body || ''), tokens);
   const preheader = renderTokens(String(template.preheader || defaults.preheader || ''), tokens);
-  const footer = renderTokens(config.brand.footerText || '', tokens);
+  const footer = renderTokens(String(template.footerDisclaimer || ''), tokens);
   const html = buildEmailHtml({
     layout: String(template.layout || 'Centered'),
     headerStyle: String(template.headerStyle || 'dark'),
@@ -133,7 +146,7 @@ async function deliverFromTemplate(opts: {
     brandColor: config.brand.primaryColor,
     secondaryColor: config.brand.secondaryColor,
     logoUrl: config.brand.logoUrl,
-    footerText: footer || renderTokens(String(template.footerDisclaimer || ''), tokens),
+    footerText: footer,
     supportWhatsapp: config.support?.supportWhatsapp,
     preheader,
   });
@@ -159,77 +172,148 @@ async function sendFromTemplate(opts: {
   productImage?: string;
   skipCustomerLimit?: boolean;
 }) {
-  const config = await getOrCreateConfig();
-  if (config.notificationLimits?.batchMode === 'hourly') {
-    await enqueuePendingSend({
-      to: opts.to,
-      channel: 'email',
-      alertType: opts.alertType,
-      productId: opts.productId,
-      payload: opts as unknown as Record<string, unknown>,
-    });
-    return true;
-  }
   return deliverFromTemplate(opts);
 }
 
-export async function flushPendingSends(limit = 50) {
-  const query = auth.elevate(items.query);
-  const update = auth.elevate(items.update);
-  const now = new Date();
-  const result = await query(COLLECTIONS.pendingSends)
-    .eq('status', 'pending')
-    .le('scheduledFor', now)
-    .limit(limit)
-    .find();
-  let sent = 0;
-  for (const row of result.items) {
-    const payload = (row.payload || {}) as Record<string, unknown>;
-    try {
-      if (row.channel === 'email') {
-        await deliverFromTemplate({
-          triggerType: String(payload.triggerType || row.alertType),
-          to: String(row.to),
-          alertType: String(row.alertType),
-          productId: String(row.productId || payload.productId || ''),
-          tokens: (payload.tokens as Record<string, string | number | undefined>) || {},
-          buttonUrl: payload.buttonUrl as string | undefined,
-          productImage: payload.productImage as string | undefined,
-        });
-      }
-      await update(COLLECTIONS.pendingSends, { ...row, status: 'sent' });
-      sent += 1;
-    } catch {
-      await update(COLLECTIONS.pendingSends, { ...row, status: 'failed' });
-    }
-  }
-  return sent;
-}
-
 export async function handleStockStatusUpdated(event: {
-  metadata?: { id?: string };
-  entity?: { productId?: string; inStock?: boolean };
-  data?: { productId?: string; inStock?: boolean };
+  metadata?: { id?: string; entityId?: string };
+  entity?: { productId?: string; inStock?: boolean; availabilityStatus?: string };
+  data?: {
+    productId?: string;
+    inStock?: boolean;
+    availabilityStatus?: string;
+    currentEntity?: { productId?: string; inStock?: boolean; availabilityStatus?: string };
+  };
+  // SDK / webhook envelope variants
+  entityId?: string;
+  updatedEvent?: { currentEntityAsJson?: { productId?: string; inStock?: boolean; availabilityStatus?: string } };
 }) {
   const eventId = event.metadata?.id || '';
   if (await markEventProcessed(eventId, 'inventory_stock_status_updated')) return;
 
-  const productId = event.entity?.productId || event.data?.productId;
-  const inStock = event.entity?.inStock ?? event.data?.inStock;
-  if (!productId) return;
+  const entity =
+    event.entity ||
+    event.data?.currentEntity ||
+    event.updatedEvent?.currentEntityAsJson ||
+    {};
+  const productId =
+    entity.productId ||
+    event.data?.productId ||
+    event.metadata?.entityId ||
+    event.entityId;
+  if (!productId) {
+    console.warn('[smart-alerts] stock-status event missing productId', JSON.stringify(event)?.slice(0, 400));
+    return;
+  }
 
   await stampSyncEvent('inventory_stock_status_updated');
+  await processInventoryRestock(productId, {
+    eventInStock: resolveInStockFlag(entity.inStock ?? event.data?.inStock, entity.availabilityStatus ?? event.data?.availabilityStatus),
+  });
+}
 
+/** V3 inventory quantity/status edits (merchant dashboard quantity changes). */
+export async function handleInventoryItemUpdated(event: {
+  metadata?: { id?: string; entityId?: string };
+  entity?: { productId?: string; inStock?: boolean; availabilityStatus?: string };
+  data?: { currentEntity?: { productId?: string; inStock?: boolean; availabilityStatus?: string } };
+  entityId?: string;
+  updatedEvent?: { currentEntityAsJson?: { productId?: string; inStock?: boolean; availabilityStatus?: string } };
+}) {
+  const eventId = event.metadata?.id || '';
+  if (await markEventProcessed(eventId, 'inventory_item_updated')) return;
+
+  const entity =
+    event.entity ||
+    event.data?.currentEntity ||
+    event.updatedEvent?.currentEntityAsJson ||
+    {};
+  const productId = entity.productId || event.metadata?.entityId || event.entityId;
+  if (!productId) {
+    console.warn('[smart-alerts] inventory-updated event missing productId');
+    return;
+  }
+
+  await stampSyncEvent('inventory_item_updated');
+  await processInventoryRestock(productId, {
+    eventInStock: resolveInStockFlag(entity.inStock, entity.availabilityStatus),
+  });
+}
+
+/** V1 inventory variant quantity changes. */
+export async function handleInventoryVariantsChanged(event: {
+  metadata?: { id?: string };
+  data?: {
+    inventoryItem?: { productId?: string; externalId?: string };
+    productId?: string;
+  };
+  entity?: { productId?: string; externalId?: string };
+}) {
+  const eventId = event.metadata?.id || '';
+  if (await markEventProcessed(eventId, 'inventory_variants_changed')) return;
+
+  const productId =
+    event.data?.inventoryItem?.productId ||
+    event.data?.inventoryItem?.externalId ||
+    event.data?.productId ||
+    event.entity?.productId ||
+    event.entity?.externalId;
+  if (!productId) {
+    console.warn('[smart-alerts] inventory-variants-changed missing productId');
+    return;
+  }
+
+  await stampSyncEvent('inventory_variants_changed');
+  await processInventoryRestock(productId);
+}
+
+function resolveInStockFlag(
+  inStock: boolean | undefined,
+  availabilityStatus?: string,
+): boolean | undefined {
+  if (typeof inStock === 'boolean') return inStock;
+  const status = String(availabilityStatus || '').toUpperCase();
+  if (!status) return undefined;
+  if (status === 'OUT_OF_STOCK') return false;
+  if (status === 'IN_STOCK' || status === 'PARTIALLY_OUT_OF_STOCK') return true;
+  return undefined;
+}
+
+/**
+ * Shared restock path: load live catalog snapshot, notify waiting back-in-stock subscribers
+ * when the product is in stock (and meets min qty).
+ */
+async function processInventoryRestock(
+  productId: string,
+  opts?: { eventInStock?: boolean },
+) {
   const config = await getOrCreateConfig();
   const snapshot = await getProductSnapshot(productId);
-  await upsertProductOverride({
-    productId,
-    productName: snapshot?.name,
-    lastKnownPrice: snapshot?.price,
-    lastStockStatus: inStock ? 'IN_STOCK' : 'OUT_OF_STOCK',
-  });
+  const inStock = opts?.eventInStock ?? snapshot?.inStock ?? false;
 
-  if (inStock === false && isModuleEnabled(config, 'sellerOutOfStock')) {
+  // Capture baseline before overwriting — inventory events may arrive after a price edit
+  // when Catalog product-updated webhooks are delayed or missing in local/dev.
+  const existingOverride = await getOverride(productId);
+  const previousPrice = Number(existingOverride?.lastKnownPrice || 0);
+  const previousStatus = String(existingOverride?.lastStockStatus || '').toUpperCase();
+  const wasOut =
+    previousStatus === 'OUT_OF_STOCK' ||
+    previousStatus === 'OOS' ||
+    previousStatus.includes('OUT');
+
+  if (snapshot) {
+    await notifyPriceDropSubscribers(productId, snapshot, config, {
+      lastKnownPrice: previousPrice,
+    });
+  }
+
+  // Seller OOS: edge-trigger only (in-stock → out-of-stock). Stay-at-0 must not re-email.
+  // Going back in stock updates lastStockStatus so the next OOS can fire once again.
+  if (
+    inStock === false &&
+    !wasOut &&
+    isModuleEnabled(config, 'sellerOutOfStock')
+  ) {
     const to = config.sellerEmail;
     if (to) {
       await sendFromTemplate({
@@ -241,33 +325,21 @@ export async function handleStockStatusUpdated(event: {
         buttonUrl: snapshot?.url,
         skipCustomerLimit: true,
       });
+      console.info(`[smart-alerts] seller OOS alert sent for ${productId}`);
     }
+  } else if (inStock === false && wasOut) {
+    console.info(`[smart-alerts] skip seller OOS for ${productId}: already out of stock`);
   }
 
+  await upsertProductOverride({
+    productId,
+    productName: snapshot?.name,
+    lastKnownPrice: snapshot?.price,
+    lastStockStatus: inStock ? 'IN_STOCK' : 'OUT_OF_STOCK',
+  });
+
   if (inStock && isModuleEnabled(config, 'backInStock')) {
-    const minQty = Number(config.triggerRules?.backInStockMinQty ?? 1);
-    const qty = snapshot?.quantity;
-    if (qty != null && qty < minQty) {
-      // Wait until inventory reaches merchant threshold
-    } else {
-      const watches = await findWaitingByProduct(productId, 'back_in_stock');
-      for (const watch of watches) {
-        await sendFromTemplate({
-          triggerType: 'back_in_stock',
-          to: String(watch.email),
-          alertType: 'back_in_stock',
-          productId,
-          tokens: {
-            customer_name: String(watch.email).split('@')[0],
-            product_name: snapshot?.name || String(watch.productName || productId),
-            product_url: snapshot?.url || String(watch.productUrl || ''),
-          },
-          buttonUrl: snapshot?.url || String(watch.productUrl || ''),
-          productImage: snapshot?.image || String(watch.productImage || ''),
-        });
-        await markNotified(String(watch._id));
-      }
-    }
+    await notifyBackInStockSubscribers(productId, snapshot);
   }
 
   if (isModuleEnabled(config, 'sellerLowStock') && snapshot) {
@@ -311,68 +383,154 @@ export async function handleStockStatusUpdated(event: {
   }
 }
 
-export async function handleProductUpdated(event: {
-  metadata?: { id?: string };
-  entity?: { _id?: string };
-  data?: { product?: { _id?: string }; changedFields?: string[]; modifiedFields?: string[] };
-}) {
-  const eventId = event.metadata?.id || '';
+async function notifyBackInStockSubscribers(
+  productId: string,
+  snapshot: Awaited<ReturnType<typeof getProductSnapshot>>,
+) {
+  const watches = await findWaitingByProduct(productId, 'back_in_stock');
+  const batch = watches.slice(0, NOTIFY_MAX_PER_EVENT);
+  if (watches.length > batch.length) {
+    console.warn(
+      `[smart-alerts] back-in-stock notify ${productId}: capping ${batch.length}/${watches.length}`,
+    );
+  }
+  const results = await mapPool(batch, NOTIFY_CONCURRENCY, async (watch) => {
+    const ok = await sendFromTemplate({
+      triggerType: 'back_in_stock',
+      to: String(watch.email),
+      alertType: 'back_in_stock',
+      productId,
+      tokens: {
+        customer_name: String(watch.email).split('@')[0],
+        product_name: snapshot?.name || String(watch.productName || productId),
+        product_url: snapshot?.url || String(watch.productUrl || ''),
+      },
+      buttonUrl: snapshot?.url || String(watch.productUrl || ''),
+      productImage: snapshot?.image || String(watch.productImage || ''),
+    });
+    await markNotified(String(watch._id));
+    return ok;
+  });
+  const sent = results.filter(Boolean).length;
+  console.info(`[smart-alerts] back-in-stock notify ${productId}: ${sent}/${batch.length} sent`);
+  return sent;
+}
+
+/**
+ * Notify waiting price-drop watchers when current price is below their baseline.
+ * Baseline prefers each subscription's watchedPrice, then lastKnownPrice fallback.
+ */
+async function notifyPriceDropSubscribers(
+  productId: string,
+  snapshot: Awaited<ReturnType<typeof getProductSnapshot>>,
+  config: SiteConfig,
+  opts?: { lastKnownPrice?: number },
+) {
+  if (!snapshot || !isModuleEnabled(config, 'priceDrop')) return 0;
+  const newPrice = Number(snapshot.price || 0);
+  if (!(newPrice > 0)) return 0;
+
+  const watches = await findWaitingByProduct(productId, 'price_drop');
+  if (watches.length === 0) return 0;
+
+  const lastKnown = Number(opts?.lastKnownPrice || 0);
+  const eligible = watches.filter((watch) => {
+    const watched = Number((watch as { watchedPrice?: number }).watchedPrice || 0);
+    const baseline = watched > 0 ? watched : lastKnown;
+    return meetsPriceDropRules(config, baseline, newPrice);
+  });
+  const batch = eligible.slice(0, NOTIFY_MAX_PER_EVENT);
+  if (eligible.length > batch.length) {
+    console.warn(
+      `[smart-alerts] price-drop notify ${productId}: capping ${batch.length}/${eligible.length}`,
+    );
+  }
+
+  const results = await mapPool(batch, NOTIFY_CONCURRENCY, async (watch) => {
+    const ok = await sendFromTemplate({
+      triggerType: 'price_drop',
+      to: String(watch.email),
+      alertType: 'price_drop',
+      productId,
+      tokens: {
+        customer_name: String(watch.email).split('@')[0],
+        product_name: snapshot.name,
+        product_url: snapshot.url,
+        product_price: String(newPrice),
+      },
+      buttonUrl: snapshot.url,
+      productImage: snapshot.image,
+    });
+    if (ok) {
+      await resetPriceDropWatch(String(watch._id), newPrice);
+    }
+    return ok;
+  });
+  const sent = results.filter(Boolean).length;
+
+  console.info(
+    `[smart-alerts] price-drop notify ${productId}: ${sent}/${batch.length} sent ` +
+      `(waiters=${watches.length}, price=${newPrice}, lastKnown=${lastKnown})`,
+  );
+  return sent;
+}
+
+export async function handleProductUpdated(event: Record<string, any>) {
+  const eventId = String(event.metadata?.id || event.id || '');
   if (await markEventProcessed(eventId, 'product_updated')) return;
 
-  const productId =
-    event.entity?._id || event.data?.product?._id || (event as { entityId?: string }).entityId;
-  if (!productId) return;
+  const productId = resolveProductUpdateId(event);
+  if (!productId) {
+    console.warn(
+      '[smart-alerts] product-updated missing productId',
+      JSON.stringify(event)?.slice(0, 500),
+    );
+    return;
+  }
 
   await stampSyncEvent('product_updated');
+  console.info(`[smart-alerts] product-updated ${productId}`);
 
-  const changed =
-    event.data?.changedFields ||
-    event.data?.modifiedFields ||
-    (event as { modifiedFields?: string[] }).modifiedFields ||
-    [];
-
+  const changed = resolveProductChangedFields(event);
   const config = await getOrCreateConfig();
   const snapshot = await getProductSnapshot(productId);
   if (!snapshot) return;
 
   const override = await getOverride(productId);
   const previousPrice = Number(override?.lastKnownPrice || 0);
+  const previousStatus = String(override?.lastStockStatus || '').toUpperCase();
+  const wasOut =
+    previousStatus === 'OUT_OF_STOCK' ||
+    previousStatus === 'OOS' ||
+    previousStatus.includes('OUT');
+
+  // Restock via product update (some editors only emit product events, not inventory status).
+  if (snapshot.inStock && wasOut && isModuleEnabled(config, 'backInStock')) {
+    await notifyBackInStockSubscribers(productId, snapshot);
+  } else if (snapshot.inStock && isModuleEnabled(config, 'backInStock')) {
+    const watches = await findWaitingByProduct(productId, 'back_in_stock');
+    if (watches.length > 0) {
+      await notifyBackInStockSubscribers(productId, snapshot);
+    }
+  }
+
+  const looksLikePriceChange =
+    changed.length === 0 ||
+    changed.some((f) => /price/i.test(f)) ||
+    (previousPrice > 0 && snapshot.price > 0 && snapshot.price !== previousPrice);
+
+  if (looksLikePriceChange) {
+    await notifyPriceDropSubscribers(productId, snapshot, config, {
+      lastKnownPrice: previousPrice,
+    });
+  }
+
   await upsertProductOverride({
     productId,
     productName: snapshot.name,
     lastKnownPrice: snapshot.price,
     lastStockStatus: snapshot.stockStatus,
   });
-
-  const priceChanged =
-    changed.length === 0 ||
-    changed.some((f) => /price/i.test(f)) ||
-    (previousPrice > 0 && snapshot.price > 0 && snapshot.price < previousPrice);
-
-  if (
-    priceChanged &&
-    meetsPriceDropRules(config, previousPrice, snapshot.price) &&
-    isModuleEnabled(config, 'priceDrop')
-  ) {
-    const watches = await findWaitingByProduct(productId, 'price_drop');
-    const cooldownMs = (config.priceDropCooldownHours || 24) * 60 * 60 * 1000;
-    for (const watch of watches) {
-      await sendFromTemplate({
-        triggerType: 'price_drop',
-        to: String(watch.email),
-        alertType: 'price_drop',
-        productId,
-        tokens: {
-          customer_name: String(watch.email).split('@')[0],
-          product_name: snapshot.name,
-          product_url: snapshot.url,
-        },
-        buttonUrl: snapshot.url,
-        productImage: snapshot.image,
-      });
-      await markNotified(String(watch._id), new Date(Date.now() + cooldownMs));
-    }
-  }
 }
 
 export async function handleProductDeleted(event: {
@@ -389,101 +547,48 @@ export async function handleProductDeleted(event: {
   await cancelWaitingByProduct(productId);
 }
 
-export async function handleOrderCreated(event: { metadata?: { id?: string } }) {
-  const eventId = event.metadata?.id || '';
-  if (await markEventProcessed(eventId, 'order_created')) return;
 
-  await stampSyncEvent('order_created');
-
-  const config = await getOrCreateConfig();
-  if (!isModuleEnabled(config, 'sellerNewOrder') || !config.sellerEmail) return;
-
-  await sendFromTemplate({
-    triggerType: 'seller_new_order',
-    to: config.sellerEmail,
-    alertType: 'seller_new_order',
-    tokens: {},
-    skipCustomerLimit: true,
-  });
-}
-
-function digestIsDue(
-  frequency: 'daily' | 'weekly' | 'off',
-  lastDigestAt?: Date | string | null,
-): boolean {
-  if (frequency === 'off') return false;
-  if (!lastDigestAt) return true;
-  const last = new Date(lastDigestAt).getTime();
-  if (Number.isNaN(last)) return true;
-  const elapsed = Date.now() - last;
-  if (frequency === 'daily') return elapsed >= 24 * 60 * 60 * 1000;
-  return elapsed >= 7 * 24 * 60 * 60 * 1000;
-}
-
-function cacheRefreshDue(config: SiteConfig): boolean {
-  const mode = config.syncSettings?.cacheRefresh || 'realtime';
-  if (mode === 'realtime') return false;
-  const last = config.syncSettings?.lastCacheRefreshAt
-    ? new Date(config.syncSettings.lastCacheRefreshAt).getTime()
-    : 0;
-  const elapsed = Date.now() - last;
-  if (mode === 'hourly') return elapsed >= 60 * 60 * 1000;
-  return elapsed >= 24 * 60 * 60 * 1000;
-}
-
-export async function resyncCatalogCache(limit = 50) {
+export async function resyncCatalogCache(
+  limit = 50,
+  eventType: 'manual_resync' | 'install_seed' | 'first_open_seed' = 'manual_resync',
+) {
   const products = await loadOutOfStockProducts(limit);
+  const isManualScan = eventType === 'manual_resync';
   for (const p of products) {
     await upsertProductOverride({
       productId: String((p as { _id?: string })._id),
       productName: (p as { name?: string }).name,
       lastStockStatus: 'OUT_OF_STOCK',
+      // Seed/cache only — do not auto-add to Tracked Products. Scan OOS can.
+      tracked: isManualScan ? true : false,
+      trackedSource: isManualScan ? 'scan' : 'system',
     });
   }
+  const now = new Date().toISOString();
   const current = await getOrCreateConfig();
   await updateConfig({
     syncSettings: {
       ...current.syncSettings,
-      lastCacheRefreshAt: new Date().toISOString(),
-      lastEventType: 'manual_resync',
+      cacheRefresh: 'realtime',
+      lastCacheRefreshAt: now,
+      lastEventAt: now,
+      lastEventType: eventType,
     },
   });
   return products.length;
 }
 
-export async function runCronJobs() {
-  const config = await getOrCreateConfig();
-  const rearmed = await rearmPriceDropWatches();
-  const pendingFlushed = await flushPendingSends();
-
-  let cacheRefreshed = 0;
-  if (cacheRefreshDue(config)) {
-    cacheRefreshed = await resyncCatalogCache(50);
+/** One-time catalog seed on install or first dashboard open; no-ops if already scanned. */
+export async function ensureCatalogSeeded(
+  reason: 'install' | 'first_open' = 'first_open',
+): Promise<{ seeded: boolean; count: number }> {
+  const current = await getOrCreateConfig();
+  if (current.syncSettings?.lastCacheRefreshAt) {
+    return { seeded: false, count: 0 };
   }
-
-  let digestSent = false;
-  if (
-    isModuleEnabled(config, 'digest') &&
-    config.sellerEmail &&
-    config.digestFrequency !== 'off' &&
-    digestIsDue(config.digestFrequency, config.lastDigestAt)
-  ) {
-    const query = auth.elevate(items.query);
-    const waiting = await query(COLLECTIONS.subscriptions).eq('state', 'waiting').limit(1).find({ returnTotalCount: true });
-    await sendFromTemplate({
-      triggerType: 'digest',
-      to: config.sellerEmail,
-      alertType: 'digest',
-      tokens: {
-        product_name: `${waiting.totalCount ?? waiting.items.length} active watches`,
-      },
-      skipCustomerLimit: true,
-    });
-    await updateConfig({ lastDigestAt: new Date() });
-    digestSent = true;
-  }
-
-  return { rearmed, digestSent, pendingFlushed, cacheRefreshed };
+  const eventType = reason === 'install' ? 'install_seed' : 'first_open_seed';
+  const count = await resyncCatalogCache(50, eventType);
+  return { seeded: true, count };
 }
 
 export async function sendTestAlert(to: string) {

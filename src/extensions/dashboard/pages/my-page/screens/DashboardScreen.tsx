@@ -31,6 +31,7 @@ type Props = {
   activity: { id: string; kind: string; label: string; at?: string }[];
   config: any;
   onOpenAutomation: (sub: AutomationSub) => void;
+  onOpenLogs: () => void;
   onOpenCustomization: (sub?: CustomizationSub) => void;
   onTestAlert: () => void;
 };
@@ -81,13 +82,13 @@ export function DashboardScreen({
   activity,
   config,
   onOpenAutomation,
+  onOpenLogs,
   onOpenCustomization,
   onTestAlert,
 }: Props) {
   if (!kpis) return null;
 
   const sync = config?.syncSettings || {};
-  const wa = config?.whatsappSetup || {};
 
   const activeSubscribers =
     kpis.activeSubscribers ?? (kpis.onHoldStock || 0) + (kpis.watchingPrice || 0);
@@ -321,7 +322,7 @@ export function DashboardScreen({
         <div
           role="button"
           tabIndex={0}
-          onClick={() => onOpenAutomation('history')}
+          onClick={onOpenLogs}
           style={{
             padding: '18px 20px',
             backgroundColor: '#FFFFFF',
@@ -439,7 +440,7 @@ export function DashboardScreen({
         <div
           role="button"
           tabIndex={0}
-          onClick={() => onOpenAutomation('history')}
+          onClick={onOpenLogs}
           style={{
             padding: '18px 20px',
             backgroundColor: '#FFFFFF',
@@ -799,27 +800,17 @@ export function DashboardScreen({
                   style={{
                     fontSize: '11px',
                     fontWeight: 600,
-                    backgroundColor:
-                      wa.mode === 'api' && wa.connectionStatus === 'connected'
-                        ? '#DCFCE7'
-                        : '#F1F5F9',
-                    color:
-                      wa.mode === 'api' && wa.connectionStatus === 'connected'
-                        ? '#15803D'
-                        : '#475569',
+                    backgroundColor: '#F1F5F9',
+                    color: '#475569',
                     padding: '2px 8px',
                     borderRadius: '10px',
                   }}
                 >
-                  {wa.mode === 'api'
-                    ? `API · ${wa.connectionStatus || 'Ready'}`
-                    : 'Manual Queue'}
+                  Manual Queue
                 </span>
               </div>
               <span style={{ fontSize: '12px', color: '#64748B', lineHeight: 1.4 }}>
-                {wa.mode === 'api'
-                  ? 'Direct automated messaging pipeline connected'
-                  : 'Click-to-chat dispatch queue active and awaiting customer triggers'}
+                Click-to-chat dispatch queue active and awaiting customer triggers
               </span>
             </div>
 
