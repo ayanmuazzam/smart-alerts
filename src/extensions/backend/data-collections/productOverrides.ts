@@ -14,6 +14,10 @@ export default {
     { type: 'NUMBER', key: 'lowStockThreshold', displayName: 'Low Stock Threshold' },
     { type: 'BOOLEAN', key: 'useGlobalThreshold', displayName: 'Use Global Threshold' },
     { type: 'DATETIME', key: 'restockAt', displayName: 'Restock At' },
+    // none | in_stock | in_stock_qty — what to do when restockAt elapses
+    { type: 'TEXT', key: 'restockAction', displayName: 'Restock Action' },
+    { type: 'NUMBER', key: 'restockQuantity', displayName: 'Restock Quantity' },
+    { type: 'DATETIME', key: 'restockAppliedAt', displayName: 'Restock Applied At' },
     { type: 'NUMBER', key: 'lastKnownPrice', displayName: 'Last Known Price' },
     { type: 'TEXT', key: 'lastStockStatus', displayName: 'Last Stock Status' },
     { type: 'DATETIME', key: 'lastLowStockAlertAt', displayName: 'Last Low Stock Alert At' },

@@ -18,7 +18,13 @@ import {
   findWaitingByProduct,
   markNotified,
 } from './subscriptions';
-import { getOverride, getProductSnapshot, getFirstProductSnapshot, loadOutOfStockProducts, upsertProductOverride } from './products';
+import {
+  getOverride,
+  getProductSnapshot,
+  getFirstProductSnapshot,
+  loadOutOfStockTrackRows,
+  upsertProductOverride,
+} from './products';
 import { getDefaultEmailTemplate } from './constants';
 import { mapPool } from './map-pool';
 import { getSiteStoreName } from './site-timezone';
@@ -428,7 +434,10 @@ async function processOneSkuInventory(
   }
 
   if (isModuleEnabled(config, 'sellerLowStock') && snapshot) {
-    const override = await getOverride(productId, variantId);
+    // Prefer variant override; fall back to product-level tracker row (variantId '').
+    const override =
+      (await getOverride(productId, variantId)) ||
+      (variantId ? await getOverride(productId, '') : null);
     const threshold = getLowStockThreshold(config, override as {
       useGlobalThreshold?: boolean;
       lowStockThreshold?: number;
@@ -679,17 +688,33 @@ export async function resyncCatalogCache(
   limit = 50,
   eventType: 'manual_resync' | 'install_seed' | 'first_open_seed' = 'manual_resync',
 ) {
-  const products = await loadOutOfStockProducts(limit);
+  const rows = await loadOutOfStockTrackRows(limit);
   const isManualScan = eventType === 'manual_resync';
-  for (const p of products) {
+  const multiSkuProducts = new Set<string>();
+  for (const row of rows) {
+    if (row.variantId) multiSkuProducts.add(row.productId);
     await upsertProductOverride({
-      productId: String((p as { _id?: string })._id),
-      productName: (p as { name?: string }).name,
-      lastStockStatus: 'OUT_OF_STOCK',
+      productId: row.productId,
+      variantId: row.variantId || '',
+      productName: row.productName,
+      sku: row.sku,
+      lastStockStatus: row.lastStockStatus || 'OUT_OF_STOCK',
       // Seed/cache only — do not auto-add to Tracked Products. Scan OOS can.
       tracked: isManualScan ? true : false,
       trackedSource: isManualScan ? 'scan' : 'system',
     });
+  }
+  // Drop legacy product-level tracked rows once we have per-variant OOS rows.
+  if (isManualScan) {
+    for (const productId of multiSkuProducts) {
+      await upsertProductOverride({
+        productId,
+        variantId: '',
+        tracked: false,
+        trackedSource: 'system',
+        lastStockStatus: 'OUT_OF_STOCK',
+      });
+    }
   }
   const now = new Date().toISOString();
   const current = await getOrCreateConfig();
@@ -702,7 +727,7 @@ export async function resyncCatalogCache(
       lastEventType: eventType,
     },
   });
-  return products.length;
+  return rows.length;
 }
 
 /** One-time catalog seed on install or first dashboard open; no-ops if already scanned. */

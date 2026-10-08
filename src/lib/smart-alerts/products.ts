@@ -12,11 +12,14 @@ import {
   enrichProductName,
   extractProductImage,
   extractProductUrl,
+  formatVariantChoices,
   isAbsoluteHttpUrl,
   mapV1SearchRow,
-  mapV3SearchRow,
+  mapV3SearchRows,
   pickVariant,
   relativeProductPath,
+  splitEnrichedProductName,
+  type SearchProductRow,
   variantKey,
   variantSellPrice,
 } from './catalog-shapes';
@@ -47,12 +50,35 @@ export type ProductSnapshot = {
   inStock: boolean;
   quantity: number | null;
   stockStatus: string;
+  /**
+   * True when the product has multiple SKUs and the caller did not pass a
+   * variantId — storefront should wait for selected-variant-id before BIS/price CTAs.
+   */
+  selectionRequired?: boolean;
 };
 
 function unwrapProduct(result: unknown): CatalogProductRaw | null {
   if (!result || typeof result !== 'object') return null;
   const r = result as { product?: CatalogProductRaw };
   return r.product || (result as CatalogProductRaw);
+}
+
+/** Full V3 product with variant choice names — search often omits variantsInfo. */
+export async function fetchProductWithVariants(
+  productId: string,
+): Promise<CatalogProductRaw | null> {
+  const version = await getCatalogVersion();
+  if (version !== 'V3_CATALOG') return null;
+  try {
+    const getProduct = auth.elevate(productsV3.getProduct);
+    return unwrapProduct(
+      await getProduct(productId, {
+        fields: ['CURRENCY', 'VARIANT_OPTION_CHOICE_NAMES'] as never,
+      }),
+    );
+  } catch {
+    return null;
+  }
 }
 
 async function resolveAbsoluteProductUrl(
@@ -180,6 +206,7 @@ export async function getProductSnapshot(
       inStock,
       quantity,
       stockStatus,
+      selectionRequired: multiSku && !requested,
     };
   }
 
@@ -199,14 +226,17 @@ export async function getProductSnapshot(
     inStock: status !== 'OUT_OF_STOCK',
     quantity: product.stock?.quantity ?? null,
     stockStatus: String(status),
+    selectionRequired: false,
   };
 }
 
-export async function searchProducts(term: string, limit = 20) {
+export async function searchProducts(term: string, limit = 20): Promise<SearchProductRow[]> {
   const version = await getCatalogVersion();
   if (version === 'STORES_NOT_INSTALLED') return [];
 
   if (version === 'V3_CATALOG') {
+    // Fetch fewer parent products — multi-SKU expands to one row per variant.
+    const productLimit = Math.min(Math.max(limit, 5), 20);
     const search = auth.elevate(productsV3.searchProducts);
     const result = (await search(
       {
@@ -219,13 +249,29 @@ export async function searchProducts(term: string, limit = 20) {
               },
             }
           : {}),
-        cursorPaging: { limit },
+        cursorPaging: { limit: productLimit },
       } as never,
-      { fields: ['CURRENCY', 'URL'] as never },
+      {
+        fields: ['CURRENCY', 'URL', 'VARIANT_OPTION_CHOICE_NAMES'] as never,
+      },
     )) as { products?: CatalogProductRaw[] };
-    return (result.products || [])
-      .map(mapV3SearchRow)
-      .filter((row) => Boolean(row.id));
+    const rows: SearchProductRow[] = [];
+    const maxRows = Math.max(limit * 3, 40);
+    for (const p of result.products || []) {
+      const productId = String(p._id || '').trim();
+      // Search payloads often omit variantsInfo — hydrate so multi-SKU expands.
+      let source = p;
+      if (productId && !(p.variantsInfo?.variants?.length)) {
+        const full = await fetchProductWithVariants(productId);
+        if (full) source = { ...full, name: full.name || p.name };
+      }
+      for (const row of mapV3SearchRows(source)) {
+        if (!row.id) continue;
+        rows.push(row);
+        if (rows.length >= maxRows) return rows;
+      }
+    }
+    return rows;
   }
 
   const query = auth.elevate(products.queryProducts);
@@ -257,11 +303,13 @@ export async function loadOutOfStockProducts(limit = 50): Promise<CatalogProduct
     const result = (await search(
       {
         filter: {
-          'inventory.availabilityStatus': { $eq: 'OUT_OF_STOCK' },
+          'inventory.availabilityStatus': {
+            $in: ['OUT_OF_STOCK', 'PARTIALLY_OUT_OF_STOCK'],
+          },
         },
         cursorPaging: { limit },
       } as never,
-      { fields: ['CURRENCY'] as never },
+      { fields: ['CURRENCY', 'VARIANT_OPTION_CHOICE_NAMES'] as never },
     )) as { products?: CatalogProductRaw[] };
     return result.products || [];
   }
@@ -275,20 +323,182 @@ export async function loadOutOfStockProducts(limit = 50): Promise<CatalogProduct
   return result.items || [];
 }
 
+export type OutOfStockTrackRow = {
+  productId: string;
+  variantId: string;
+  productName: string;
+  lastStockStatus: string;
+  sku?: string;
+};
+
+/**
+ * Expand OOS / partially-OOS products into per-variant tracker rows.
+ * Fully OOS multi-SKU → every variant; partial → only OOS variants.
+ * Always hydrates via getProduct — search often returns products without variantsInfo.
+ */
+export async function loadOutOfStockTrackRows(limit = 50): Promise<OutOfStockTrackRow[]> {
+  const products = await loadOutOfStockProducts(limit);
+  const rows: OutOfStockTrackRow[] = [];
+
+  for (const p of products) {
+    const productId = String(p._id || '').trim();
+    if (!productId) continue;
+
+    const full = (await fetchProductWithVariants(productId)) || p;
+    const productName = String(full.name || p.name || '').trim() || 'Unknown Product';
+    const productStatus = String(
+      full.inventory?.availabilityStatus ||
+        p.inventory?.availabilityStatus ||
+        p.stock?.inventoryStatus ||
+        '',
+    );
+    const variants = full.variantsInfo?.variants || p.variantsInfo?.variants || [];
+
+    if (variants.length <= 1) {
+      const v = variants[0];
+      const label = formatVariantChoices(v);
+      rows.push({
+        productId,
+        variantId: variantKey(v) || '',
+        productName: label ? enrichProductName(productName, v) : productName,
+        lastStockStatus: 'OUT_OF_STOCK',
+        sku: v?.sku ? String(v.sku) : undefined,
+      });
+      continue;
+    }
+
+    const fullyOos = productStatus === 'OUT_OF_STOCK';
+    for (const v of variants) {
+      const vid = variantKey(v);
+      if (!vid) continue;
+      const flagged = v.inventoryStatus?.inStock;
+      let isOos = false;
+      if (typeof flagged === 'boolean') {
+        isOos = !flagged;
+      } else if (fullyOos) {
+        isOos = true;
+      } else {
+        const inv = await getInventoryItem(productId, vid);
+        const status = String(inv?.availabilityStatus || '').toUpperCase();
+        const qty = inv?.quantity;
+        isOos = !(
+          inv?.inStock === true ||
+          status === 'IN_STOCK' ||
+          status === 'PREORDER' ||
+          (qty != null && qty > 0)
+        );
+      }
+      if (!isOos) continue;
+      rows.push({
+        productId,
+        variantId: vid,
+        productName: enrichProductName(productName, v),
+        lastStockStatus: 'OUT_OF_STOCK',
+        sku: v?.sku ? String(v.sku) : undefined,
+      });
+    }
+  }
+
+  return rows;
+}
+
+export type TrackedDisplayRow = {
+  _id?: string;
+  productId: string;
+  variantId?: string;
+  productName?: string;
+  variantLabel?: string;
+  sku?: string;
+  lastStockStatus?: string;
+  [key: string]: unknown;
+};
+
+/**
+ * Attach human-readable variant labels for the Inventory Tracker UI.
+ * Also backfills productName with "Product — Color: Blue" when missing.
+ */
+export async function enrichTrackedRowsForDisplay(
+  rows: TrackedDisplayRow[],
+): Promise<TrackedDisplayRow[]> {
+  if (!rows.length) return rows;
+  const byProduct = new Map<string, CatalogProductRaw | null>();
+
+  const ensureProduct = async (productId: string) => {
+    if (byProduct.has(productId)) return byProduct.get(productId) || null;
+    const full = await fetchProductWithVariants(productId);
+    byProduct.set(productId, full);
+    return full;
+  };
+
+  const out: TrackedDisplayRow[] = [];
+  for (const row of rows) {
+    const productId = String(row.productId || '').trim();
+    const variantId = String(row.variantId || '').trim();
+    const split = splitEnrichedProductName(row.productName);
+    let variantLabel = split.variantLabel;
+    let productName = String(row.productName || '').trim();
+    let sku = row.sku ? String(row.sku) : '';
+
+    if (productId && (variantId || !variantLabel)) {
+      const product = await ensureProduct(productId);
+      const variants = product?.variantsInfo?.variants || [];
+      const variant = variantId
+        ? variants.find((v) => variantKey(v) === variantId)
+        : variants.length === 1
+          ? variants[0]
+          : undefined;
+      if (variant) {
+        const label = formatVariantChoices(variant);
+        if (label) {
+          variantLabel = label;
+          const base = split.baseName || String(product?.name || productName).trim();
+          productName = enrichProductName(base, variant);
+        }
+        if (!sku && variant.sku) sku = String(variant.sku);
+      } else if (!variantId && variants.length > 1) {
+        // Legacy product-level row on a multi-SKU product — surface that clearly.
+        variantLabel = variantLabel || `${variants.length} variants (product-level)`;
+      }
+    }
+
+    out.push({
+      ...row,
+      productName,
+      variantLabel: variantLabel || undefined,
+      sku: sku || row.sku,
+    });
+  }
+  return out;
+}
+
 export type TrackedSource = 'manual' | 'scan' | 'system';
+
+/** What Inventory Tracker does when restockAt elapses. */
+export type RestockAction = 'none' | 'in_stock' | 'in_stock_qty';
+
+export function normalizeRestockAction(raw: unknown): RestockAction {
+  const v = String(raw || 'none').trim().toLowerCase();
+  if (v === 'in_stock' || v === 'in_stock_qty') return v;
+  return 'none';
+}
 
 /**
  * Upsert override for (productId, variantId).
- * Merchant restock dates / tracker rows use variantId ''.
- * Customer price-drop baselines may use a real variantId.
+ * Inventory Tracker / restock rows use a real variantId when multi-SKU;
+ * product-level merchant rows and simple products may use ''.
+ * Customer price-drop baselines use a real variantId when available.
  */
 export async function upsertProductOverride(data: {
   productId: string;
   variantId?: string;
   productName?: string;
+  sku?: string;
   lowStockThreshold?: number;
   useGlobalThreshold?: boolean;
   restockAt?: Date | string | null;
+  restockAction?: RestockAction | string | null;
+  restockQuantity?: number | null;
+  restockAppliedAt?: Date | string | null;
   lastKnownPrice?: number;
   lastStockStatus?: string;
   lastLowStockAlertAt?: Date | string | null;
@@ -306,20 +516,47 @@ export async function upsertProductOverride(data: {
     | { tracked?: boolean; trackedSource?: string; [key: string]: unknown }
     | undefined;
 
+  let nextRestockAt: Date | null;
+  if (data.restockAt !== undefined) {
+    nextRestockAt = data.restockAt ? new Date(data.restockAt) : null;
+  } else if (prev?.restockAt) {
+    const d = new Date(prev.restockAt as string | Date);
+    nextRestockAt = Number.isFinite(d.getTime()) ? d : null;
+  } else {
+    nextRestockAt = null;
+  }
+
+  // Scheduling a new (or changed) timer resets applied marker so it can fire again.
+  const prevRestockIso = (() => {
+    if (!prev?.restockAt) return '';
+    const d = new Date(prev.restockAt as string | Date);
+    return Number.isFinite(d.getTime()) ? d.toISOString() : '';
+  })();
+  const nextRestockIso = nextRestockAt ? nextRestockAt.toISOString() : '';
+  const restockAtChanged = data.restockAt !== undefined && prevRestockIso !== nextRestockIso;
+
   const payload: Record<string, unknown> = {
     title: data.productName || data.productId,
     productId: data.productId,
     variantId: data.variantId || '',
     productName: data.productName || '',
-    sku: '',
+    sku:
+      data.sku !== undefined
+        ? String(data.sku || '')
+        : String(prev?.sku || ''),
     lowStockThreshold: data.lowStockThreshold ?? prev?.lowStockThreshold ?? 5,
     useGlobalThreshold: data.useGlobalThreshold ?? prev?.useGlobalThreshold ?? true,
-    restockAt:
-      data.restockAt !== undefined
-        ? data.restockAt
-          ? new Date(data.restockAt)
-          : null
-        : (prev?.restockAt ?? null),
+    restockAt: nextRestockAt,
+    restockAction:
+      data.restockAction !== undefined
+        ? normalizeRestockAction(data.restockAction)
+        : normalizeRestockAction(prev?.restockAction),
+    restockQuantity:
+      data.restockQuantity !== undefined
+        ? data.restockQuantity == null
+          ? null
+          : Math.max(0, Math.floor(Number(data.restockQuantity) || 0))
+        : (prev?.restockQuantity ?? null),
     lastKnownPrice: data.lastKnownPrice ?? prev?.lastKnownPrice ?? 0,
     lastStockStatus: data.lastStockStatus || prev?.lastStockStatus || '',
     tracked: data.tracked !== undefined ? data.tracked : (prev?.tracked ?? false),
@@ -332,6 +569,13 @@ export async function upsertProductOverride(data: {
     payload.lastLowStockAlertAt = data.lastLowStockAlertAt
       ? new Date(data.lastLowStockAlertAt)
       : null;
+  }
+  if (data.restockAppliedAt !== undefined) {
+    payload.restockAppliedAt = data.restockAppliedAt
+      ? new Date(data.restockAppliedAt)
+      : null;
+  } else if (restockAtChanged) {
+    payload.restockAppliedAt = null;
   }
 
   if (existing.items[0]) {
@@ -371,13 +615,34 @@ export async function getStorefrontOverride(productId: string, variantId?: strin
   };
 }
 
-type InventoryItemRow = {
+export type InventoryItemRow = {
+  _id?: string;
+  id?: string;
+  revision?: string | number;
   quantity?: number | null;
   inStock?: boolean;
   availabilityStatus?: string;
   variantId?: string;
   productId?: string;
 };
+
+export async function listInventoryItemsForProduct(
+  productId: string,
+  limit = 100,
+): Promise<InventoryItemRow[]> {
+  try {
+    const version = await getCatalogVersion();
+    if (version !== 'V3_CATALOG') return [];
+    const query = auth.elevate(inventoryItemsV3.queryInventoryItems);
+    const result = await query().eq('productId', productId).limit(limit).find();
+    return ((result.items || []) as InventoryItemRow[]).map((raw) => ({
+      ...raw,
+      _id: raw._id || raw.id,
+    }));
+  } catch {
+    return [];
+  }
+}
 
 export async function getInventoryItem(
   productId: string,
@@ -387,11 +652,18 @@ export async function getInventoryItem(
     const version = await getCatalogVersion();
     if (version !== 'V3_CATALOG') return null;
     const query = auth.elevate(inventoryItemsV3.queryInventoryItems);
-    let builder = query().eq('productId', productId);
     const vid = String(variantId || '').trim();
-    if (vid) builder = builder.eq('variantId', vid);
-    const result = await builder.limit(1).find();
-    return (result.items?.[0] as InventoryItemRow | undefined) || null;
+    if (vid) {
+      const result = await query().eq('productId', productId).eq('variantId', vid).limit(1).find();
+      const raw = (result.items?.[0] as InventoryItemRow | undefined) || null;
+      if (!raw) return null;
+      return { ...raw, _id: raw._id || raw.id };
+    }
+    // No variantId: prefer a single inventory row; otherwise caller should list all.
+    const all = await listInventoryItemsForProduct(productId, 2);
+    if (all.length === 1) return all[0];
+    if (all.length === 0) return null;
+    return all[0];
   } catch {
     return null;
   }

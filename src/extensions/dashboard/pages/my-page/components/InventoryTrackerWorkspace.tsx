@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Card,
+  Checkbox,
   EmptyState,
   Input,
   NumberInput,
@@ -20,25 +21,63 @@ import {
   StatusAlert,
   Timer,
   Sparkles,
+  DeleteSmall,
   DismissSmall,
 } from '@wix/wix-ui-icons-common';
 import { MonoIconBadge } from './MonoIconBadge';
 import { storedToDatetimeLocal } from '../../../../../lib/smart-alerts/datetime-local';
 
+export type RestockActionDraft = 'none' | 'in_stock' | 'in_stock_qty';
+
+export interface OverrideDraft {
+  lowStockThreshold: string;
+  restockAt: string;
+  restockAction: RestockActionDraft;
+  restockQuantity: string;
+}
+
 export interface TrackedProductRow {
   _id?: string;
   productId: string;
+  variantId?: string;
   productName?: string;
+  /** e.g. `Color: Blue · Size: M` — from catalog enrichment */
+  variantLabel?: string;
+  sku?: string;
   lastStockStatus?: string;
   lowStockThreshold?: number;
   restockAt?: string | null;
+  restockAction?: string | null;
+  restockQuantity?: number | null;
   trackedSource?: string;
+}
+
+function displayProductParts(row: TrackedProductRow): {
+  title: string;
+  variantLabel: string;
+} {
+  const raw = String(row.productName || '').trim();
+  const sep = ' — ';
+  const idx = raw.indexOf(sep);
+  const fromName = idx > 0 ? raw.slice(idx + sep.length).trim() : '';
+  const title = idx > 0 ? raw.slice(0, idx).trim() : raw || 'Unknown Product';
+  const variantLabel = String(row.variantLabel || fromName || '').trim();
+  return { title, variantLabel };
 }
 
 export interface SearchProductRow {
   id: string;
   name: string;
   stockStatus: string;
+  variantId?: string;
+  variantLabel?: string;
+  sku?: string;
+}
+
+function rowKey(row: { _id?: string; productId?: string; id?: string; variantId?: string }) {
+  if (row._id) return row._id;
+  const productId = row.productId || row.id || '';
+  return `${productId}::${row.variantId || ''}`;
 }
 
 export interface InventoryTrackerWorkspaceProps {
@@ -50,12 +89,33 @@ export interface InventoryTrackerWorkspaceProps {
   searchResults: SearchProductRow[];
   onTrackProduct: (row: SearchProductRow) => Promise<void>;
   tracked: TrackedProductRow[];
-  draftOverrides: Record<string, { lowStockThreshold: string; restockAt: string }>;
-  setDraftOverrides: React.Dispatch<
-    React.SetStateAction<Record<string, { lowStockThreshold: string; restockAt: string }>>
-  >;
+  draftOverrides: Record<string, OverrideDraft>;
+  setDraftOverrides: React.Dispatch<React.SetStateAction<Record<string, OverrideDraft>>>;
   siteTimeZone?: string;
   onSaveProductOverride: (row: TrackedProductRow) => Promise<void>;
+  onUntrackSelected: (rows: TrackedProductRow[]) => Promise<void>;
+}
+
+function normalizeActionDraft(raw: unknown): RestockActionDraft {
+  const v = String(raw || 'none').trim().toLowerCase();
+  if (v === 'in_stock' || v === 'in_stock_qty') return v;
+  return 'none';
+}
+
+function draftForRow(
+  row: TrackedProductRow,
+  draftOverrides: Record<string, OverrideDraft>,
+  siteTimeZone: string,
+): OverrideDraft {
+  const key = rowKey(row);
+  return (
+    draftOverrides[key] || {
+      lowStockThreshold: String(row.lowStockThreshold ?? 5),
+      restockAt: storedToDatetimeLocal(row.restockAt, siteTimeZone),
+      restockAction: normalizeActionDraft(row.restockAction),
+      restockQuantity: String(row.restockQuantity ?? 10),
+    }
+  );
 }
 
 export function InventoryTrackerWorkspace({
@@ -71,9 +131,12 @@ export function InventoryTrackerWorkspace({
   setDraftOverrides,
   siteTimeZone = 'UTC',
   onSaveProductOverride,
+  onUntrackSelected,
 }: InventoryTrackerWorkspaceProps) {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [justSavedKey, setJustSavedKey] = useState<string | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [isBulkRemoving, setIsBulkRemoving] = useState(false);
   const [trackingId, setTrackingId] = useState<string | null>(null);
   const [isLoadingOos, setIsLoadingOos] = useState(false);
   const [activeFilter, setActiveFilter] = useState<'manual' | 'oos' | 'scheduled'>('manual');
@@ -89,7 +152,8 @@ export function InventoryTrackerWorkspace({
   };
 
   const handleTrack = async (row: SearchProductRow) => {
-    setTrackingId(row.id);
+    const key = rowKey(row);
+    setTrackingId(key);
     try {
       await onTrackProduct(row);
       setActiveFilter('manual');
@@ -100,7 +164,7 @@ export function InventoryTrackerWorkspace({
   };
 
   const handleSaveRow = async (row: TrackedProductRow) => {
-    const key = row._id || row.productId;
+    const key = rowKey(row);
     setSavingKey(key);
     try {
       await onSaveProductOverride(row);
@@ -131,6 +195,48 @@ export function InventoryTrackerWorkspace({
     return true;
   });
 
+  // Bulk remove only on the Tracked Products (manual) list.
+  const canBulkRemove = activeFilter === 'manual';
+  const selectableRows = canBulkRemove ? filteredTracked : [];
+  const isAllSelected =
+    selectableRows.length > 0 &&
+    selectableRows.every((row) => selectedKeys.includes(rowKey(row)));
+
+  const setActiveFilterAndClear = (next: 'manual' | 'oos' | 'scheduled') => {
+    setActiveFilter(next);
+    setSelectedKeys([]);
+  };
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedKeys([]);
+    } else {
+      setSelectedKeys(selectableRows.map((row) => rowKey(row)));
+    }
+  };
+
+  const toggleSelectRow = (key: string) => {
+    setSelectedKeys((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+  };
+
+  const handleBulkRemove = async () => {
+    const rows = selectableRows.filter((row) => selectedKeys.includes(rowKey(row)));
+    if (!rows.length) return;
+    const ok = window.confirm(
+      `Remove ${rows.length} tracked product${rows.length > 1 ? 's' : ''} from Inventory Tracker?\n\nRestock timers for these items will be cleared.`,
+    );
+    if (!ok) return;
+    setIsBulkRemoving(true);
+    try {
+      await onUntrackSelected(rows);
+      setSelectedKeys([]);
+    } finally {
+      setIsBulkRemoving(false);
+    }
+  };
+
   const showSearchResults = searchResults.length > 0 && !dismissSearchResults;
 
   return (
@@ -158,8 +264,9 @@ export function InventoryTrackerWorkspace({
                 Depleted Inventory Requires Attention
               </Text>
               <Text size="small" secondary>
-                {outOfStockCount} product{outOfStockCount > 1 ? 's are' : ' is'} currently out of stock.
-                Setting expected restock dates activates urgency countdown timers on your storefront.
+                {outOfStockCount} product / variant{outOfStockCount > 1 ? 's are' : ' is'} currently
+                out of stock. Setting expected restock dates activates urgency countdown timers on
+                your storefront.
               </Text>
             </Box>
           </Box>
@@ -340,7 +447,7 @@ export function InventoryTrackerWorkspace({
                     <button
                       key={key}
                       type="button"
-                      onClick={() => setActiveFilter(key)}
+                      onClick={() => setActiveFilterAndClear(key)}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -398,6 +505,65 @@ export function InventoryTrackerWorkspace({
                 </Button>
               </Box>
             </Box>
+
+            {canBulkRemove && selectedKeys.length > 0 ? (
+              <div
+                style={{
+                  background: 'linear-gradient(135deg, #1E40AF 0%, #0F172A 100%)',
+                  borderRadius: '10px',
+                  padding: '10px 16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  color: '#FFFFFF',
+                  boxShadow: '0 4px 14px rgba(30, 64, 175, 0.25)',
+                }}
+              >
+                <Box verticalAlign="middle" gap="SP2">
+                  <span
+                    style={{
+                      backgroundColor: '#3B82F6',
+                      color: '#FFFFFF',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                    }}
+                  >
+                    {selectedKeys.length}
+                  </span>
+                  <span style={{ fontSize: '13px', fontWeight: 500 }}>
+                    tracked product{selectedKeys.length > 1 ? 's' : ''} selected
+                  </span>
+                </Box>
+                <Box verticalAlign="middle" gap="SP2">
+                  <Button
+                    size="small"
+                    skin="destructive"
+                    prefixIcon={<DeleteSmall />}
+                    disabled={isBulkRemoving}
+                    onClick={handleBulkRemove}
+                  >
+                    {isBulkRemoving ? 'Removing…' : 'Remove Selected'}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedKeys([])}
+                    disabled={isBulkRemoving}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#94A3B8',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    Clear
+                  </button>
+                </Box>
+              </div>
+            ) : null}
 
             {searching ? (
               <Box align="center" padding="24px">
@@ -468,13 +634,39 @@ export function InventoryTrackerWorkspace({
                           >
                             <Package size="16" />
                           </div>
-                          <Box direction="vertical" gap="2px">
+                          <Box direction="vertical" gap="4px">
                             <span style={{ fontWeight: 600, fontSize: '13px', color: '#0F172A' }}>
-                              {row.name}
+                              {row.variantLabel && row.name.includes(' — ')
+                                ? row.name.split(' — ')[0]
+                                : row.name}
                             </span>
-                            <span style={{ fontSize: '11px', color: '#94A3B8' }}>
-                              ID: {row.id}
-                            </span>
+                            {row.variantLabel ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignSelf: 'flex-start',
+                                  padding: '2px 8px',
+                                  borderRadius: '6px',
+                                  background: '#EEF2FF',
+                                  color: '#3730A3',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {row.variantLabel}
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '11px', color: '#94A3B8' }}>
+                                {row.variantId
+                                  ? `Variant ID: ${row.variantId.slice(0, 8)}…`
+                                  : `ID: ${row.id}`}
+                              </span>
+                            )}
+                            {row.sku ? (
+                              <span style={{ fontSize: '10.5px', color: '#94A3B8' }}>
+                                SKU {row.sku}
+                              </span>
+                            ) : null}
                           </Box>
                         </Box>
                       ),
@@ -512,10 +704,13 @@ export function InventoryTrackerWorkspace({
                     },
                     {
                       title: '',
-                      width: '150px',
+                      width: '160px',
                       render: (row: SearchProductRow) => {
+                        const trackKey = rowKey(row);
                         const isAlreadyTracked = tracked.some(
-                          (t) => t.productId === row.id || t._id === row.id,
+                          (t) =>
+                            t.productId === row.id &&
+                            (t.variantId || '') === (row.variantId || ''),
                         );
                         if (isAlreadyTracked) {
                           return (
@@ -529,10 +724,14 @@ export function InventoryTrackerWorkspace({
                             size="tiny"
                             priority="secondary"
                             prefixIcon={<Check />}
-                            disabled={trackingId === row.id}
+                            disabled={trackingId === trackKey}
                             onClick={() => handleTrack(row)}
                           >
-                            {trackingId === row.id ? 'Adding…' : 'Track Product'}
+                            {trackingId === trackKey
+                              ? 'Adding…'
+                              : row.variantId
+                                ? 'Track Variant'
+                                : 'Track Product'}
                           </Button>
                         );
                       },
@@ -559,7 +758,7 @@ export function InventoryTrackerWorkspace({
                     ? 'Set an expected restock date on a tracked product to show a countdown on the storefront.'
                     : activeFilter === 'oos'
                       ? 'Click “Scan Out-of-Stock” to import current OOS products, or search and track a specific product.'
-                      : 'Search your store catalog and click Track Product to add items here for thresholds and restock timers.'
+                      : 'Search your store catalog and track a product or variant for thresholds and restock timers.'
                 }
                 skin="section"
               >
@@ -592,54 +791,104 @@ export function InventoryTrackerWorkspace({
                   <Table
                     data={filteredTracked}
                     columns={[
+                      ...(canBulkRemove
+                        ? [
+                            {
+                              title: (
+                                <Checkbox
+                                  checked={isAllSelected}
+                                  indeterminate={
+                                    selectedKeys.length > 0 && !isAllSelected
+                                  }
+                                  onChange={toggleSelectAll}
+                                />
+                              ),
+                              width: '44px',
+                              render: (row: TrackedProductRow) => {
+                                const key = rowKey(row);
+                                return (
+                                  <Checkbox
+                                    checked={selectedKeys.includes(key)}
+                                    onChange={() => toggleSelectRow(key)}
+                                  />
+                                );
+                              },
+                            },
+                          ]
+                        : []),
                       {
-                        title: 'Product',
-                        width: '26%',
-                        render: (row: TrackedProductRow) => (
-                          <Box verticalAlign="middle" gap="SP2">
-                            <div
-                              style={{
-                                width: '38px',
-                                height: '38px',
-                                borderRadius: '10px',
-                                background: 'linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%)',
-                                color: '#116DFF',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                                boxShadow: '0 2px 6px rgba(17, 109, 255, 0.12)',
-                              }}
-                            >
-                              <Package size="18" />
-                            </div>
-                            <Box direction="vertical" gap="2px" style={{ minWidth: 0 }}>
-                              <span
+                        title: 'Product / Variant',
+                        width: canBulkRemove ? '24%' : '26%',
+                        render: (row: TrackedProductRow) => {
+                          const { title, variantLabel } = displayProductParts(row);
+                          return (
+                            <Box verticalAlign="middle" gap="SP2">
+                              <div
                                 style={{
-                                  fontWeight: 600,
-                                  fontSize: '13.5px',
-                                  color: '#0F172A',
+                                  width: '38px',
+                                  height: '38px',
+                                  borderRadius: '10px',
+                                  background: 'linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%)',
+                                  color: '#116DFF',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0,
+                                  boxShadow: '0 2px 6px rgba(17, 109, 255, 0.12)',
                                 }}
                               >
-                                {row.productName || 'Unknown Product'}
-                              </span>
-                              <span
-                                title={row.productId}
-                                style={{
-                                  fontSize: '11px',
-                                  color: '#94A3B8',
-                                  maxWidth: '175px',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                  display: 'inline-block',
-                                }}
-                              >
-                                ID: {row.productId}
-                              </span>
+                                <Package size="18" />
+                              </div>
+                              <Box direction="vertical" gap="4px" style={{ minWidth: 0 }}>
+                                <span
+                                  style={{
+                                    fontWeight: 600,
+                                    fontSize: '13.5px',
+                                    color: '#0F172A',
+                                  }}
+                                >
+                                  {title}
+                                </span>
+                                {variantLabel ? (
+                                  <span
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      alignSelf: 'flex-start',
+                                      maxWidth: '100%',
+                                      padding: '2px 8px',
+                                      borderRadius: '6px',
+                                      background: '#EEF2FF',
+                                      color: '#3730A3',
+                                      fontSize: '11px',
+                                      fontWeight: 600,
+                                      lineHeight: 1.35,
+                                    }}
+                                    title={variantLabel}
+                                  >
+                                    {variantLabel}
+                                  </span>
+                                ) : (
+                                  <span
+                                    style={{
+                                      fontSize: '11px',
+                                      color: '#94A3B8',
+                                    }}
+                                  >
+                                    {row.variantId
+                                      ? `Variant ID · ${row.variantId.slice(0, 10)}…`
+                                      : 'Entire product (no variant options)'}
+                                  </span>
+                                )}
+                                {row.sku ? (
+                                  <span style={{ fontSize: '10.5px', color: '#94A3B8' }}>
+                                    SKU {row.sku}
+                                  </span>
+                                ) : null}
+                              </Box>
                             </Box>
-                          </Box>
-                        ),
+                          );
+                        },
                       },
                       {
                         title: 'Stock Status',
@@ -679,13 +928,10 @@ export function InventoryTrackerWorkspace({
                       },
                       {
                         title: 'Alert Limit',
-                        width: '16%',
+                        width: '12%',
                         render: (row: TrackedProductRow) => {
-                          const key = row._id || row.productId;
-                          const draft = draftOverrides[key] || {
-                            lowStockThreshold: String(row.lowStockThreshold ?? 5),
-                            restockAt: storedToDatetimeLocal(row.restockAt, siteTimeZone),
-                          };
+                          const key = rowKey(row);
+                          const draft = draftForRow(row, draftOverrides, siteTimeZone);
                           return (
                             <Box direction="vertical" gap="2px">
                               <Box style={{ width: '110px' }}>
@@ -715,16 +961,13 @@ export function InventoryTrackerWorkspace({
                       },
                       {
                         title: 'Restock Countdown',
-                        width: '30%',
+                        width: '36%',
                         render: (row: TrackedProductRow) => {
-                          const key = row._id || row.productId;
-                          const draft = draftOverrides[key] || {
-                            lowStockThreshold: String(row.lowStockThreshold ?? 5),
-                            restockAt: storedToDatetimeLocal(row.restockAt, siteTimeZone),
-                          };
+                          const key = rowKey(row);
+                          const draft = draftForRow(row, draftOverrides, siteTimeZone);
                           const hasDate = Boolean(draft.restockAt);
                           return (
-                            <Box direction="vertical" gap="2px">
+                            <Box direction="vertical" gap="6px">
                               <Box style={{ width: '150px' }}>
                                 <Input
                                   size="small"
@@ -745,7 +988,6 @@ export function InventoryTrackerWorkspace({
                                   display: 'flex',
                                   alignItems: 'center',
                                   gap: '5px',
-                                  marginTop: '2px',
                                 }}
                               >
                                 {hasDate ? (
@@ -780,25 +1022,95 @@ export function InventoryTrackerWorkspace({
                                   <span style={{ color: '#94A3B8' }}>No timer scheduled</span>
                                 )}
                               </div>
+                              {hasDate ? (
+                                <Box direction="vertical" gap="4px">
+                                  <span
+                                    style={{
+                                      fontSize: '10.5px',
+                                      fontWeight: 600,
+                                      color: '#475569',
+                                    }}
+                                  >
+                                    When timer ends
+                                  </span>
+                                  <select
+                                    value={draft.restockAction}
+                                    onChange={(e) =>
+                                      setDraftOverrides((d) => ({
+                                        ...d,
+                                        [key]: {
+                                          ...draft,
+                                          restockAction: normalizeActionDraft(e.target.value),
+                                        },
+                                      }))
+                                    }
+                                    style={{
+                                      width: '100%',
+                                      maxWidth: '220px',
+                                      fontSize: '12px',
+                                      padding: '5px 8px',
+                                      borderRadius: '6px',
+                                      border: '1px solid #CBD5E1',
+                                      background: '#fff',
+                                      color: '#0F172A',
+                                    }}
+                                  >
+                                    <option value="none">Do nothing (countdown only)</option>
+                                    <option value="in_stock">Mark in stock</option>
+                                    <option value="in_stock_qty">Mark in stock with quantity</option>
+                                  </select>
+                                  {draft.restockAction === 'in_stock_qty' ? (
+                                    <Box style={{ width: '110px' }}>
+                                      <NumberInput
+                                        size="small"
+                                        min={1}
+                                        max={99999}
+                                        value={Number(draft.restockQuantity) || 10}
+                                        suffix={<Input.Affix>qty</Input.Affix>}
+                                        onChange={(value) =>
+                                          setDraftOverrides((d) => ({
+                                            ...d,
+                                            [key]: {
+                                              ...draft,
+                                              restockQuantity: String(value ?? 10),
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </Box>
+                                  ) : null}
+                                  {draft.restockAction !== 'none' ? (
+                                    <span style={{ fontSize: '10px', color: '#94A3B8' }}>
+                                      Applies when the PDP countdown hits 0. Requires app permission
+                                      SCOPE.STORES.INVENTORY_ITEM_WRITE.
+                                    </span>
+                                  ) : null}
+                                </Box>
+                              ) : null}
                             </Box>
                           );
                         },
                       },
                       {
-                        title: 'Action',
-                        width: '14%',
+                        title: 'Save',
+                        width: '12%',
                         render: (row: TrackedProductRow) => {
-                          const key = row._id || row.productId;
+                          const key = rowKey(row);
                           const isSaving = savingKey === key;
                           const isJustSaved = justSavedKey === key;
 
                           const draft = draftOverrides[key];
                           const initialThreshold = String(row.lowStockThreshold ?? 5);
                           const initialRestockAt = storedToDatetimeLocal(row.restockAt, siteTimeZone);
+                          const initialAction = normalizeActionDraft(row.restockAction);
+                          const initialQty = String(row.restockQuantity ?? 10);
                           const isDirty =
                             draft &&
                             (draft.lowStockThreshold !== initialThreshold ||
-                              draft.restockAt !== initialRestockAt);
+                              draft.restockAt !== initialRestockAt ||
+                              draft.restockAction !== initialAction ||
+                              (draft.restockAction === 'in_stock_qty' &&
+                                draft.restockQuantity !== initialQty));
 
                           if (isJustSaved) {
                             return (
@@ -823,7 +1135,7 @@ export function InventoryTrackerWorkspace({
                             <Button
                               size="small"
                               priority={isDirty ? 'primary' : 'secondary'}
-                              disabled={isSaving}
+                              disabled={isSaving || isBulkRemoving}
                               onClick={() => handleSaveRow(row)}
                             >
                               {isSaving ? 'Saving…' : 'Save'}

@@ -26,6 +26,7 @@ import { AutomationScreen } from './screens/AutomationScreen';
 import { EmailCustomizationScreen, type TemplateForm } from './screens/EmailCustomizationScreen';
 import { StorefrontCustomizationScreen } from './screens/StorefrontCustomizationScreen';
 import { LogsAndQuotaScreen } from './screens/LogsAndQuotaScreen';
+import { SupportWidget } from './components/SupportWidget';
 import type { AlertChannelFilter } from './components/LogsAndQuotaWorkspace';
 
 /** Former floating "My alerts" corner button — disable on sites that still have it embedded. */
@@ -170,7 +171,15 @@ export default function SmartAlertsPage() {
   const [selectedAlerts, setSelectedAlerts] = useState<string[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [draftOverrides, setDraftOverrides] = useState<
-    Record<string, { lowStockThreshold: string; restockAt: string }>
+    Record<
+      string,
+      {
+        lowStockThreshold: string;
+        restockAt: string;
+        restockAction: 'none' | 'in_stock' | 'in_stock_qty';
+        restockQuantity: string;
+      }
+    >
   >({});
   const [siteTimeZone, setSiteTimeZone] = useState('UTC');
   const [rulesModule, setRulesModule] = useState<string | null>(null);
@@ -344,11 +353,25 @@ export default function SmartAlertsPage() {
     setSearchResults(data.search || []);
     const tz = String(data.siteTimeZone || 'UTC');
     setSiteTimeZone(tz);
-    const drafts: Record<string, { lowStockThreshold: string; restockAt: string }> = {};
+    const drafts: Record<
+      string,
+      {
+        lowStockThreshold: string;
+        restockAt: string;
+        restockAction: 'none' | 'in_stock' | 'in_stock_qty';
+        restockQuantity: string;
+      }
+    > = {};
     for (const row of data.tracked || []) {
-      drafts[row._id || row.productId] = {
+      const actionRaw = String(row.restockAction || 'none').toLowerCase();
+      const restockAction =
+        actionRaw === 'in_stock' || actionRaw === 'in_stock_qty' ? actionRaw : 'none';
+      const draftKey = row._id || `${row.productId}::${row.variantId || ''}`;
+      drafts[draftKey] = {
         lowStockThreshold: String(row.lowStockThreshold ?? 5),
         restockAt: storedToDatetimeLocal(row.restockAt, tz),
+        restockAction,
+        restockQuantity: String(row.restockQuantity ?? 10),
       };
     }
     setDraftOverrides(drafts);
@@ -780,15 +803,24 @@ export default function SmartAlertsPage() {
           title="Smart Alerts"
           subtitle="Back-in-stock, price-drop, and seller notifications for your store."
         />
-        <Page.Tail>
-          <Tabs
-            items={PRIMARY_TABS}
-            type="compactSide"
-            activeId={primary}
-            onClick={(tab) => setPrimary(tab.id as PrimaryTab)}
-          />
-        </Page.Tail>
-        <Page.Content>{content}</Page.Content>
+        <Page.Content>
+          <Box direction="vertical" gap="SP4">
+            {/* Scrolls away with content — not in Page.Tail */}
+            <SupportWidget />
+            {/* Sticks below header after the support card scrolls out */}
+            <Page.Sticky>
+              <Box backgroundColor="D70" paddingBottom="SP2">
+                <Tabs
+                  items={PRIMARY_TABS}
+                  type="compactSide"
+                  activeId={primary}
+                  onClick={(tab) => setPrimary(tab.id as PrimaryTab)}
+                />
+              </Box>
+            </Page.Sticky>
+            {content}
+          </Box>
+        </Page.Content>
       </Page>
       <ToastContainer maxToasts={3}>
         {toasts.map((t) => (

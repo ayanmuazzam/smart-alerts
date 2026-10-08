@@ -1,11 +1,11 @@
-import { extensions } from '@wix/astro/builders'
+import { extensions } from '@wix/astro/builders';
 
 export default extensions.sitePlugin({
   id: 'b9345f77-369c-4b71-91c6-79c07eadaa17',
-  name: 'Smart Alerts PDP',
+  name: 'Smart Alerts Urgency',
   marketData: {
-    name: 'Smart Alerts PDP',
-    description: 'Back-in-stock, price-drop, and urgency alerts on the product page.',
+    name: 'Smart Alerts Urgency',
+    description: 'Low-stock badge and restock countdown timer on the product page.',
     logoUrl: '{{BASE_URL}}/smart-alerts-pdp-logo.svg',
   },
   placements: [

@@ -151,8 +151,8 @@ export function ModuleRulesSidePanel({
 
       {moduleKey === 'restockCountdown' && (
         <SectionHelper appearance="standard" title="Countdown timer">
-          Displays an animated timer on out-of-stock product pages. You can schedule exact restock
-          dates individually for products in the Inventory tab.
+          Displays an animated timer on out-of-stock product pages. Schedule restock times in
+          Inventory Tracker — optionally auto mark in stock (or set a quantity) when the timer ends.
         </SectionHelper>
       )}
 

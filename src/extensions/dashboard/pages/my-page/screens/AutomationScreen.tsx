@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Badge,
   Box,
@@ -21,7 +21,10 @@ import { MonoIconBadge } from '../components/MonoIconBadge';
 import { ModuleRulesSidePanel } from '../components/ModuleRulesSidePanel';
 import { AutomationRuleCard } from '../components/AutomationRuleCard';
 import { SubscribersListTable } from '../components/SubscribersListTable';
-import { InventoryTrackerWorkspace } from '../components/InventoryTrackerWorkspace';
+import {
+  InventoryTrackerWorkspace,
+  type OverrideDraft,
+} from '../components/InventoryTrackerWorkspace';
 import { WhatsAppQueueWorkspace } from '../components/WhatsAppQueueWorkspace';
 import { SettingsScreen } from './SettingsScreen';
 import { MODULE_META, type AutomationSub, type ModuleMetaItem } from '../adminApi';
@@ -54,10 +57,8 @@ type Props = {
   setSearch: (s: string) => void;
   searchResults: any[];
   inventorySearching?: boolean;
-  draftOverrides: Record<string, { lowStockThreshold: string; restockAt: string }>;
-  setDraftOverrides: React.Dispatch<
-    React.SetStateAction<Record<string, { lowStockThreshold: string; restockAt: string }>>
-  >;
+  draftOverrides: Record<string, OverrideDraft>;
+  setDraftOverrides: React.Dispatch<React.SetStateAction<Record<string, OverrideDraft>>>;
   siteTimeZone: string;
   rulesModule: string | null;
   setRulesModule: (key: string | null) => void;
@@ -100,7 +101,7 @@ function getTriggerSummary(key: string, config: any): string {
       return `Displays "Only X left" badge when inventory ≤ ${threshold} units`;
     }
     case 'restockCountdown':
-      return 'Displays countdown timer using expected restock dates';
+      return 'Displays countdown timer; Inventory Tracker can auto mark in stock when it ends';
     default:
       return '';
   }
@@ -172,6 +173,30 @@ export function AutomationScreen(props: Props) {
   const sellerOn = ['sellerOutOfStock', 'sellerLowStock'].some((k) => config?.modules?.[k]);
   const activeMeta = MODULE_META.find((m) => m.key === rulesModule);
 
+  // While Inventory Tracker is open, poll due restock → inventory actions (~1 min).
+  useEffect(() => {
+    if (sub !== 'inventory') return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const result = await adminPost({ action: 'applyDueRestocks', limit: 25 });
+        const applied = Array.isArray(result?.applied)
+          ? result.applied.filter((r: { ok?: boolean }) => r.ok)
+          : [];
+        if (!cancelled && applied.length > 0) {
+          await onRefreshInventory();
+        }
+      } catch {
+        // Non-fatal — next poll retries.
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [sub, adminPost, onRefreshInventory]);
 
   // Clean sidebar navigation items without heavy counts
   const sidebarItems: {
@@ -493,26 +518,31 @@ export function AutomationScreen(props: Props) {
                 await adminPost({
                   action: 'saveOverride',
                   productId: row.id,
+                  variantId: row.variantId || '',
                   productName: row.name,
+                  sku: row.sku || '',
                   lastStockStatus: row.stockStatus || 'OUT_OF_STOCK',
                   tracked: true,
                   trackedSource: 'manual',
                 });
                 await onRefreshInventory();
-              }, 'Tracking product');
+              }, row.variantId ? 'Tracking variant' : 'Tracking product');
             }}
             tracked={tracked}
             draftOverrides={draftOverrides}
             setDraftOverrides={setDraftOverrides}
             siteTimeZone={siteTimeZone}
             onSaveProductOverride={async (row) => {
-              const key = row._id || row.productId;
+              const key = row._id || `${row.productId}::${row.variantId || ''}`;
               const draft = draftOverrides[key];
+              const restockAction = draft?.restockAction || 'none';
               await onRun(async () => {
                 await adminPost({
                   action: 'saveOverride',
                   productId: row.productId,
+                  variantId: row.variantId || '',
                   productName: row.productName,
+                  sku: row.sku || '',
                   lastStockStatus: row.lastStockStatus || 'OUT_OF_STOCK',
                   lowStockThreshold: Number(
                     draft?.lowStockThreshold ?? row.lowStockThreshold ?? 5,
@@ -522,9 +552,28 @@ export function AutomationScreen(props: Props) {
                   trackedSource: 'manual',
                   // Wall-clock; server converts using site Language & Region TZ.
                   restockAt: draft?.restockAt ? draft.restockAt : null,
+                  restockAction,
+                  restockQuantity:
+                    restockAction === 'in_stock_qty'
+                      ? Number(draft?.restockQuantity ?? 10)
+                      : null,
                 });
                 await onRefreshInventory();
               }, 'Product saved');
+            }}
+            onUntrackSelected={async (rows) => {
+              await onRun(async () => {
+                await adminPost({
+                  action: 'untrackOverride',
+                  items: rows.map((row) => ({
+                    productId: row.productId,
+                    variantId: row.variantId || '',
+                    productName: row.productName,
+                    sku: row.sku || '',
+                  })),
+                });
+                await onRefreshInventory();
+              }, rows.length > 1 ? `Removed ${rows.length} from tracker` : 'Removed from tracker');
             }}
           />
         ) : null}

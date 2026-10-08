@@ -4,7 +4,17 @@ import { auth } from '@wix/essentials';
 import { requireDashboardAuth } from '../../lib/smart-alerts/auth-guard';
 import { getOrCreateConfig, updateConfig } from '../../lib/smart-alerts/config';
 import { canSendAlert, countAlertsUsed } from '../../lib/smart-alerts/email';
-import { getCatalogVersion, searchProducts, upsertProductOverride } from '../../lib/smart-alerts/products';
+import {
+  enrichTrackedRowsForDisplay,
+  getCatalogVersion,
+  normalizeRestockAction,
+  searchProducts,
+  upsertProductOverride,
+} from '../../lib/smart-alerts/products';
+import {
+  applyDueRestocks,
+  getGrantedInventoryPermissions,
+} from '../../lib/smart-alerts/restock-apply';
 import {
   manualTriggerAlert,
   ensureCatalogSeeded,
@@ -85,6 +95,9 @@ const TRACKED_FIELDS = [
   'lowStockThreshold',
   'useGlobalThreshold',
   'restockAt',
+  'restockAction',
+  'restockQuantity',
+  'restockAppliedAt',
   'lastKnownPrice',
   'lastStockStatus',
   'tracked',
@@ -256,6 +269,14 @@ export const GET: APIRoute = async ({ request }) => {
     }
 
     if (view === 'products') {
+      // Opportunistic: apply any due restock → inventory actions while merchant is in Tracker.
+      let restockApply: Awaited<ReturnType<typeof applyDueRestocks>> | null = null;
+      try {
+        restockApply = await applyDueRestocks({ limit: 25 });
+      } catch (err) {
+        console.warn('[smart-alerts] applyDueRestocks on products view failed', err);
+      }
+
       const q = (url.searchParams.get('q') || '').trim();
       // Only intentional tracks: Track Product (manual) and Scan Out-of-Stock (scan).
       const source = url.searchParams.get('source') || 'all';
@@ -279,11 +300,15 @@ export const GET: APIRoute = async ({ request }) => {
       const totalCount = result.totalCount ?? result.items.length;
       const search = q ? await searchProducts(q) : [];
       const siteTimeZone = await getSiteTimeZone();
+      const tracked = await enrichTrackedRowsForDisplay(
+        (result.items || []) as Parameters<typeof enrichTrackedRowsForDisplay>[0],
+      );
       return Response.json({
-        tracked: result.items,
+        tracked,
         search,
         catalogVersion: await getCatalogVersion(),
         siteTimeZone,
+        restockApply,
         totalCount,
         skip,
         limit,
@@ -392,13 +417,81 @@ export const POST: APIRoute = async ({ request }) => {
               String(body.restockAt).replace(/\.\d{3}Z$/, '').replace(/Z$/, '').slice(0, 16),
               siteTimeZone,
             );
+      const restockAction = normalizeRestockAction(body.restockAction);
+      const restockQuantity =
+        restockAction === 'in_stock_qty'
+          ? Math.max(1, Math.min(99999, Math.floor(Number(body.restockQuantity) || 1)))
+          : body.restockQuantity != null
+            ? Math.max(0, Math.floor(Number(body.restockQuantity) || 0))
+            : null;
       await upsertProductOverride({
         ...body,
         restockAt,
+        restockAction,
+        restockQuantity,
         tracked: body.tracked !== false,
         trackedSource: body.trackedSource === 'scan' ? 'scan' : 'manual',
       });
       return Response.json({ ok: true, siteTimeZone });
+    }
+
+    if (action === 'untrackOverride') {
+      const itemsToUntrack: Array<{
+        productId: string;
+        variantId?: string;
+        productName?: string;
+        sku?: string;
+      }> = Array.isArray(body.items)
+        ? body.items
+        : body.productId
+          ? [
+              {
+                productId: body.productId,
+                variantId: body.variantId,
+                productName: body.productName,
+                sku: body.sku,
+              },
+            ]
+          : [];
+      if (!itemsToUntrack.length) {
+        return Response.json({ error: 'items or productId required' }, { status: 400 });
+      }
+      let removed = 0;
+      for (const item of itemsToUntrack.slice(0, 100)) {
+        const productId = String(item.productId || '').trim();
+        if (!productId) continue;
+        await upsertProductOverride({
+          productId,
+          variantId: String(item.variantId || ''),
+          productName: item.productName ? String(item.productName) : undefined,
+          sku: item.sku != null ? String(item.sku) : undefined,
+          tracked: false,
+          trackedSource: 'system',
+          restockAt: null,
+          restockAction: 'none',
+          restockQuantity: null,
+        });
+        removed += 1;
+      }
+      return Response.json({ ok: true, removed });
+    }
+
+    if (action === 'applyDueRestocks') {
+      const result = await applyDueRestocks({
+        limit: Math.min(Math.max(Number(body.limit) || 25, 1), 50),
+      });
+      const failed = result.applied.filter((r) => !r.ok);
+      let inventoryPermissions = null;
+      if (failed.some((f) => String(f.error || '').includes('403') || String(f.error || '').includes('denied'))) {
+        inventoryPermissions = await getGrantedInventoryPermissions();
+        console.warn('[smart-alerts] inventory permissions on this install', inventoryPermissions);
+      }
+      return Response.json({ ok: true, ...result, inventoryPermissions });
+    }
+
+    if (action === 'checkInventoryPermissions') {
+      const inventoryPermissions = await getGrantedInventoryPermissions();
+      return Response.json({ ok: true, ...inventoryPermissions });
     }
 
     if (action === 'deleteAlerts') {

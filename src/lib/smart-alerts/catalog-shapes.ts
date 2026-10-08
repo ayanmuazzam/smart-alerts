@@ -49,6 +49,11 @@ export type SearchProductRow = {
   name: string;
   stockStatus: string;
   price: number;
+  /** Empty for product-level / V1; real id for multi-SKU V3 rows. */
+  variantId?: string;
+  /** Option choices only, e.g. `Blue / M`. */
+  variantLabel?: string;
+  sku?: string;
 };
 
 function isAbsoluteHttpUrl(value: unknown): boolean {
@@ -123,13 +128,33 @@ export function variantKey(v: CatalogVariantRaw | null | undefined): string {
   return String(v?._id || v?.id || '').trim();
 }
 
-/** Human-readable option choices, e.g. `Blue / M`. */
+/** Human-readable option choices, e.g. `Color: Blue · Size: M`. */
 export function formatVariantChoices(variant: CatalogVariantRaw | null | undefined): string {
   if (!variant?.choices?.length) return '';
   return variant.choices
-    .map((c) => String(c.optionChoiceNames?.choiceName || '').trim())
+    .map((c) => {
+      const choice = String(c.optionChoiceNames?.choiceName || '').trim();
+      const option = String(c.optionChoiceNames?.optionName || '').trim();
+      if (option && choice) return `${option}: ${choice}`;
+      return choice;
+    })
     .filter(Boolean)
-    .join(' / ');
+    .join(' · ');
+}
+
+/** Split `Product — Color: Blue` into base name + variant label. */
+export function splitEnrichedProductName(name: string | undefined | null): {
+  baseName: string;
+  variantLabel: string;
+} {
+  const raw = String(name || '').trim();
+  const sep = ' — ';
+  const idx = raw.indexOf(sep);
+  if (idx <= 0) return { baseName: raw, variantLabel: '' };
+  return {
+    baseName: raw.slice(0, idx).trim(),
+    variantLabel: raw.slice(idx + sep.length).trim(),
+  };
 }
 
 export function enrichProductName(
@@ -163,14 +188,61 @@ export function variantSellPrice(variant: CatalogVariantRaw | null | undefined):
   return Number(variant.price.actualPrice?.amount || 0);
 }
 
+function variantStockStatus(
+  variant: CatalogVariantRaw | undefined,
+  productStatus: string,
+): string {
+  if (variant?.inventoryStatus && typeof variant.inventoryStatus.inStock === 'boolean') {
+    return variant.inventoryStatus.inStock ? 'IN_STOCK' : 'OUT_OF_STOCK';
+  }
+  return productStatus || 'IN_STOCK';
+}
+
+/** One search row per product (legacy helpers / first-product hints). */
 export function mapV3SearchRow(p: CatalogProductRaw): SearchProductRow {
+  const rows = mapV3SearchRows(p);
+  return rows[0] || { id: '', name: '', stockStatus: '', price: 0 };
+}
+
+/**
+ * Expand a V3 product into tracker search rows.
+ * Multi-SKU → one row per variant; simple products → one product/SKU row.
+ */
+export function mapV3SearchRows(p: CatalogProductRaw): SearchProductRow[] {
   const id = String(p._id || '');
-  return {
-    id,
-    name: p.name || '',
-    stockStatus: p.inventory?.availabilityStatus || '',
-    price: Number(p.variantsInfo?.variants?.[0]?.price?.actualPrice?.amount || 0),
-  };
+  if (!id) return [];
+  const productStatus = String(p.inventory?.availabilityStatus || '');
+  const variants = p.variantsInfo?.variants || [];
+
+  if (variants.length <= 1) {
+    const v = variants[0];
+    const vid = variantKey(v);
+    const variantLabel = formatVariantChoices(v) || undefined;
+    return [
+      {
+        id,
+        name: variantLabel ? enrichProductName(p.name || '', v) : p.name || '',
+        stockStatus: variantStockStatus(v, productStatus),
+        price: variantSellPrice(v) || Number(v?.price?.actualPrice?.amount || 0),
+        variantId: vid || '',
+        variantLabel,
+        sku: v?.sku ? String(v.sku) : undefined,
+      },
+    ];
+  }
+
+  return variants.map((v) => {
+    const vid = variantKey(v);
+    return {
+      id,
+      name: enrichProductName(p.name || '', v),
+      stockStatus: variantStockStatus(v, productStatus),
+      price: variantSellPrice(v),
+      variantId: vid,
+      variantLabel: formatVariantChoices(v) || undefined,
+      sku: v?.sku ? String(v.sku) : undefined,
+    };
+  });
 }
 
 export function mapV1SearchRow(p: CatalogProductRaw): SearchProductRow {
@@ -179,5 +251,6 @@ export function mapV1SearchRow(p: CatalogProductRaw): SearchProductRow {
     name: p.name || '',
     stockStatus: p.stock?.inventoryStatus || '',
     price: Number(p.priceData?.price || 0),
+    variantId: '',
   };
 }

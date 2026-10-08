@@ -8,8 +8,8 @@ const Panel: FC = () => {
       <SidePanel width="300" height="100vh">
         <SidePanel.Content>
           <Text>
-            Smart Alerts reads product stock and price from the page context. Configure modules and
-            appearance in the Smart Alerts dashboard.
+            Shows the low-stock urgency badge and restock countdown. Configure styling in the Smart
+            Alerts dashboard under Storefront Customization → Urgency &amp; Timers.
           </Text>
         </SidePanel.Content>
       </SidePanel>

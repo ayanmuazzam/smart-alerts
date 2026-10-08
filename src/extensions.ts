@@ -21,6 +21,8 @@ import smartAlertsCorner from './extensions/site/embedded-scripts/smart-alerts-c
 
 import smartAlertsPdp from './extensions/site/plugins/smart-alerts-pdp/smart-alerts-pdp.extension.ts';
 
+import smartAlertsButtons from './extensions/site/plugins/smart-alerts-buttons/smart-alerts-buttons.extension.ts';
+
 import appInstanceInstalled from './extensions/backend/events/app-instance-installed/app-instance-installed.extension.ts';
 
 export default app()
@@ -35,4 +37,5 @@ export default app()
   .use(productDeletedV1)
   .use(smartAlertsCorner)
   .use(smartAlertsPdp)
+  .use(smartAlertsButtons)
   .use(appInstanceInstalled);
