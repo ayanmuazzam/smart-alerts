@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getOrCreateConfig, isModuleEnabled } from '../../lib/smart-alerts/config';
-import { getOverride, getProductSnapshot } from '../../lib/smart-alerts/products';
+import { getProductSnapshot, getStorefrontOverride } from '../../lib/smart-alerts/products';
 
 export const GET: APIRoute = async ({ request }) => {
   try {
@@ -13,7 +13,8 @@ export const GET: APIRoute = async ({ request }) => {
 
     const config = await getOrCreateConfig();
     const snapshot = await getProductSnapshot(productId, variantId);
-    const override = await getOverride(productId, variantId);
+    // Variant override first, then merchant product-level restock/threshold row.
+    const override = await getStorefrontOverride(productId, variantId);
 
     return Response.json({
       product: snapshot,

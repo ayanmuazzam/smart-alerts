@@ -28,28 +28,9 @@ import { MonoIconBadge } from '../components/MonoIconBadge';
 import { LiveEmailPreview } from '../components/LiveEmailPreview';
 import { TEMPLATE_VARIABLES } from '../adminApi';
 import { getDefaultEmailTemplate } from '../../../../../lib/smart-alerts/constants';
+import { insertVariable, type TemplateForm } from '../template-form';
 
-export type TemplateForm = {
-  triggerType: string;
-  layout: string;
-  subject: string;
-  preheader: string;
-  headerStyle: 'dark' | 'brand' | 'white';
-  headerText: string;
-  showBadge: boolean;
-  badgeText: string;
-  headline: string;
-  body: string;
-  showProductImage: boolean;
-  reviewQuote: string;
-  buttonLabel: string;
-  showFeatures: boolean;
-  featuresTitle: string;
-  featuresText: string;
-  closingText: string;
-  signoffText: string;
-  footerDisclaimer: string;
-};
+export type { TemplateForm };
 
 type Props = {
   config: any;
@@ -89,16 +70,6 @@ const LAYOUT_OPTIONS = [
   { id: 'Minimal', title: 'Minimal', desc: 'Compact notification text' },
 ];
 
-function insertVariable(
-  field: keyof TemplateForm,
-  variable: string,
-  form: TemplateForm,
-  setForm: React.Dispatch<React.SetStateAction<TemplateForm>>,
-) {
-  const current = String(form[field] ?? '');
-  const spacer = current.length > 0 && !current.endsWith(' ') && !current.endsWith('\n') ? ' ' : '';
-  setForm((f) => ({ ...f, [field]: `${current}${spacer}${variable}` }));
-}
 
 export function EmailCustomizationScreen({
   config,

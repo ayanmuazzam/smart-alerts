@@ -17,12 +17,27 @@ export type SubscribeInput = {
   watchedPrice?: number;
 };
 
+export type WaitingSubscription = {
+  _id?: string;
+  email?: string;
+  phone?: string;
+  productId?: string;
+  variantId?: string;
+  productName?: string;
+  productUrl?: string;
+  productImage?: string;
+  subscriptionType?: string;
+  watchedPrice?: number;
+  state?: string;
+};
+
 export async function createSubscription(input: SubscribeInput) {
   if (!input.consent) {
     throw new Error('Consent is required');
   }
   const email = String(input.email || '').trim().toLowerCase();
   const productId = String(input.productId || '').trim();
+  const variantId = String(input.variantId || '').trim();
   if (!email || !productId) {
     throw new Error('Email and productId are required');
   }
@@ -40,38 +55,43 @@ export async function createSubscription(input: SubscribeInput) {
   }
 
   const query = auth.elevate(items.query);
-  const existing = await query(COLLECTIONS.subscriptions)
+  // Fetch waiting rows for email+product+type, then match variantId in-app.
+  // (CMS .eq('variantId') alone can miss/mis-match before indexes catch up and
+  // previously overwrote a different SKU's waiting row.)
+  const existingPage = await query(COLLECTIONS.subscriptions)
     .eq('email', email)
     .eq('productId', productId)
     .eq('subscriptionType', input.subscriptionType)
     .eq('state', 'waiting')
-    .limit(1)
+    .limit(100)
     .find();
 
-  if (existing.items[0]) {
-    // Keep waiting row, but refresh watchedPrice when shopper re-subscribes
-    // so the baseline matches the price they saw on the PDP.
-    if (
-      input.watchedPrice != null &&
-      Number(existing.items[0].watchedPrice || 0) !== Number(input.watchedPrice)
-    ) {
-      const update = auth.elevate(items.update);
-      return update(COLLECTIONS.subscriptions, {
-        ...existing.items[0],
-        watchedPrice: Number(input.watchedPrice),
-        productName: input.productName || existing.items[0].productName,
-        productUrl: input.productUrl || existing.items[0].productUrl,
-        productImage: input.productImage || existing.items[0].productImage,
-      });
-    }
-    return existing.items[0];
+  const existing = (existingPage.items || []).find(
+    (row) => String((row as { variantId?: string }).variantId || '') === variantId,
+  );
+
+  if (existing) {
+    // Same SKU re-subscribe: refresh baseline / display fields only.
+    const update = auth.elevate(items.update);
+    return update(COLLECTIONS.subscriptions, {
+      ...existing,
+      variantId,
+      watchedPrice:
+        input.watchedPrice != null
+          ? Number(input.watchedPrice)
+          : Number(existing.watchedPrice || 0),
+      productName: input.productName || existing.productName,
+      productUrl: input.productUrl || existing.productUrl,
+      productImage: input.productImage || existing.productImage,
+      phone: input.phone || existing.phone || '',
+    });
   }
 
   const insert = auth.elevate(items.insert);
   return insert(COLLECTIONS.subscriptions, {
-    title: `${input.subscriptionType}:${email}`,
+    title: `${input.subscriptionType}:${email}:${variantId || 'product'}`,
     productId,
-    variantId: input.variantId || '',
+    variantId,
     productName: input.productName || '',
     productUrl: input.productUrl || '',
     productImage: input.productImage || '',
@@ -86,9 +106,18 @@ export async function createSubscription(input: SubscribeInput) {
   });
 }
 
-export async function findWaitingByProduct(productId: string, subscriptionType: SubscriptionType) {
+/**
+ * Waiting subscribers for a product.
+ * Pass `variantId` to scope to one SKU (`''` = product-level / simple products).
+ * Omit `variantId` to return all waiters for the product (any variant).
+ */
+export async function findWaitingByProduct(
+  productId: string,
+  subscriptionType: SubscriptionType,
+  variantId?: string,
+): Promise<WaitingSubscription[]> {
   const query = auth.elevate(items.query);
-  return queryAllPages(
+  const rows = await queryAllPages(
     (limit, skip) =>
       query(COLLECTIONS.subscriptions)
         .eq('productId', productId)
@@ -99,6 +128,7 @@ export async function findWaitingByProduct(productId: string, subscriptionType: 
           'email',
           'phone',
           'productId',
+          'variantId',
           'productName',
           'productUrl',
           'productImage',
@@ -111,6 +141,9 @@ export async function findWaitingByProduct(productId: string, subscriptionType: 
         .find(),
     100,
   );
+  if (variantId === undefined) return rows;
+  const wanted = String(variantId || '');
+  return rows.filter((row) => String(row.variantId || '') === wanted);
 }
 
 export async function cancelWaitingByProduct(productId: string) {
@@ -141,21 +174,6 @@ export async function markNotified(id: string) {
   await update(COLLECTIONS.subscriptions, {
     ...item,
     state: 'notified',
-    lastNotifiedAt: new Date(),
-    cooldownUntil: null,
-  });
-}
-
-/** After a price-drop alert, keep watching from the new price (no cron cooldown). */
-export async function resetPriceDropWatch(id: string, newWatchedPrice: number) {
-  const get = auth.elevate(items.get);
-  const item = await get(COLLECTIONS.subscriptions, id);
-  if (!item) return;
-  const update = auth.elevate(items.update);
-  await update(COLLECTIONS.subscriptions, {
-    ...item,
-    state: 'waiting',
-    watchedPrice: newWatchedPrice,
     lastNotifiedAt: new Date(),
     cooldownUntil: null,
   });

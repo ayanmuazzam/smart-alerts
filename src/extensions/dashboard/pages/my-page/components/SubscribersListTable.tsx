@@ -25,11 +25,13 @@ import {
   Sparkles,
 } from '@wix/wix-ui-icons-common';
 import { MonoIconBadge } from './MonoIconBadge';
+import { getAvatarGradient, getInitials } from './subscriber-helpers';
 
 export interface SubscriberItem {
   _id: string;
   email: string;
   productId: string;
+  variantId?: string;
   productName?: string;
   state?: string;
   createdAt?: string;
@@ -57,32 +59,6 @@ export interface SubscribersListTableProps {
   onGoCustomization: () => void;
 }
 
-// Generate deterministic vibrant gradients based on email
-function getAvatarGradient(email: string) {
-  const gradients = [
-    'linear-gradient(135deg, #6366F1 0%, #3B82F6 100%)', // Indigo -> Blue
-    'linear-gradient(135deg, #EC4899 0%, #8B5CF6 100%)', // Pink -> Purple
-    'linear-gradient(135deg, #10B981 0%, #059669 100%)', // Emerald -> Green
-    'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)', // Amber -> Orange
-    'linear-gradient(135deg, #8B5CF6 0%, #6366F1 100%)', // Violet -> Indigo
-    'linear-gradient(135deg, #06B6D4 0%, #0284C7 100%)', // Cyan -> Sky
-  ];
-  let hash = 0;
-  for (let i = 0; i < (email || '').length; i++) {
-    hash = (hash + email.charCodeAt(i)) % gradients.length;
-  }
-  return gradients[hash] || gradients[0];
-}
-
-function getInitials(email: string) {
-  if (!email) return 'U';
-  const namePart = email.split('@')[0] || '';
-  const clean = namePart.replace(/[^a-zA-Z]/g, '');
-  if (clean.length >= 2) {
-    return clean.slice(0, 2).toUpperCase();
-  }
-  return (clean[0] || email[0] || 'U').toUpperCase();
-}
 
 export function SubscribersListTable({
   listType,
@@ -667,6 +643,11 @@ export function SubscribersListTable({
                                 >
                                   {row.productName || 'Unknown Product'}
                                 </span>
+                                {row.variantId ? (
+                                  <span style={{ fontSize: '11px', color: '#64748B' }}>
+                                    Variant · {row.variantId.slice(0, 8)}…
+                                  </span>
+                                ) : null}
                                 {row.productId ? (
                                   <span style={{ fontSize: '11px', color: '#94A3B8' }}>
                                     ID: {row.productId}
@@ -899,6 +880,11 @@ export function SubscribersListTable({
                                 >
                                   {row.productName || 'Unknown Product'}
                                 </span>
+                                {row.variantId ? (
+                                  <span style={{ fontSize: '11px', color: '#64748B' }}>
+                                    Variant · {row.variantId.slice(0, 8)}…
+                                  </span>
+                                ) : null}
                                 {row.productId ? (
                                   <span style={{ fontSize: '11px', color: '#94A3B8' }}>
                                     ID: {row.productId}

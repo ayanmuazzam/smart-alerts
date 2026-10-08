@@ -6,7 +6,6 @@ import {
   FormField,
   Input,
   NumberInput,
-  Text,
   ToggleSwitch,
 } from '@wix/design-system';
 import { DEFAULT_APPEARANCE } from '../../../../../../lib/smart-alerts/constants';
@@ -15,6 +14,7 @@ const FONT_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-s
 
 type Props = {
   stockThreshold: number;
+  lowStockMessage: string;
   timerStyle: string;
   timerTheme?: string;
   timerPrefix?: string;
@@ -22,7 +22,9 @@ type Props = {
   timerPulse?: boolean;
   timerShowIcon?: boolean;
   badgeColor: string;
+  timerColor: string;
   onStockThreshold: (n: number) => void;
+  onLowStockMessage: (msg: string) => void;
   onTimerStyle: (id: string) => void;
   onTimerTheme?: (theme: string) => void;
   onTimerPrefix?: (prefix: string) => void;
@@ -30,6 +32,7 @@ type Props = {
   onTimerPulse?: (pulse: boolean) => void;
   onTimerShowIcon?: (show: boolean) => void;
   onBadgeColor: (color: unknown) => void;
+  onTimerColor: (color: unknown) => void;
 };
 
 const TIMER_STYLES = [
@@ -118,6 +121,7 @@ const TIMER_THEMES = [
 
 export function UrgencySettingsPanel({
   stockThreshold,
+  lowStockMessage,
   timerStyle,
   timerTheme = 'solid',
   timerPrefix = 'Back in stock in',
@@ -125,7 +129,9 @@ export function UrgencySettingsPanel({
   timerPulse = true,
   timerShowIcon = true,
   badgeColor,
+  timerColor,
   onStockThreshold,
+  onLowStockMessage,
   onTimerStyle,
   onTimerTheme,
   onTimerPrefix,
@@ -133,18 +139,20 @@ export function UrgencySettingsPanel({
   onTimerPulse,
   onTimerShowIcon,
   onBadgeColor,
+  onTimerColor,
 }: Props) {
   const currentStyle = timerStyle || 'pill';
   const currentTheme = timerTheme || 'solid';
 
-  const activeBadgeColor = badgeColor || DEFAULT_APPEARANCE.colors.badge || '#000000';
-  const isDarkBadge = isDarkColor(activeBadgeColor);
+  const activeTimerColor =
+    timerColor || badgeColor || DEFAULT_APPEARANCE.colors.timer || '#000000';
+  const isDarkTimer = isDarkColor(activeTimerColor);
 
   const getThemePreview = (id: string) => {
     if (id === 'solid') {
       return {
-        bg: isDarkBadge ? '#000000' : activeBadgeColor,
-        border: isDarkBadge ? '#27272A' : activeBadgeColor,
+        bg: isDarkTimer ? '#000000' : activeTimerColor,
+        border: isDarkTimer ? '#27272A' : activeTimerColor,
         text: '#FFFFFF',
       };
     }
@@ -152,21 +160,21 @@ export function UrgencySettingsPanel({
       return {
         bg: '#0F172A',
         border: '#334155',
-        text: isDarkBadge ? '#FFFFFF' : activeBadgeColor,
+        text: isDarkTimer ? '#FFFFFF' : activeTimerColor,
       };
     }
     // tint
     return {
-      bg: isDarkBadge ? '#F4F4F5' : '#FEF3C7',
-      border: isDarkBadge ? '#71717A' : activeBadgeColor,
-      text: isDarkBadge ? '#18181B' : activeBadgeColor,
+      bg: isDarkTimer ? '#F4F4F5' : '#FEF3C7',
+      border: isDarkTimer ? '#71717A' : activeTimerColor,
+      text: isDarkTimer ? '#18181B' : activeTimerColor,
     };
   };
 
   return (
     <Box direction="vertical" gap="16px">
       <FormField
-        label="“Only X Left” Low Stock Threshold"
+        label="Low Stock Threshold"
         infoContent="Shows the urgency badge when stock is at or below this quantity."
       >
         <NumberInput
@@ -178,13 +186,35 @@ export function UrgencySettingsPanel({
       </FormField>
 
       <FormField
-        label="Urgency Badge & Timer Accent Color"
-        infoContent="Used for low-stock badges, countdown digits, pulse beacons, and accents."
+        label="Urgency Badge Text"
+        infoContent="Custom copy for the low-stock badge. Use {x} where the live stock quantity should appear."
+      >
+        <Input
+          value={lowStockMessage}
+          onChange={(e) => onLowStockMessage(e.target.value)}
+          placeholder="e.g. Hurry we have {x} stock only"
+        />
+      </FormField>
+
+      <FormField
+        label="Urgency Badge Color"
+        infoContent="Text color for the low-stock urgency message on the product page."
       >
         <ColorInput
           value={badgeColor || DEFAULT_APPEARANCE.colors.badge}
           onConfirm={onBadgeColor}
           onChange={onBadgeColor}
+        />
+      </FormField>
+
+      <FormField
+        label="Timer Accent Color"
+        infoContent="Used for countdown digits, pulse beacons, borders, and timer accents."
+      >
+        <ColorInput
+          value={timerColor || DEFAULT_APPEARANCE.colors.timer}
+          onConfirm={onTimerColor}
+          onChange={onTimerColor}
         />
       </FormField>
 

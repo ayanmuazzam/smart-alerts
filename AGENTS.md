@@ -12,3 +12,12 @@ you can try updating the skills by running the following command:
 `wix skills update`
 
 This will update the skills to the latest version.
+
+## App architecture (Smart Alerts)
+
+This is a **Wix CLI / Astro** app — not classic Velo. There is no `$w` / `.jsw`.
+
+- **Privileged backend:** `src/lib/smart-alerts/*` and `src/pages/api/*` (use `auth.elevate`, not `suppressAuth`).
+- **Admin API:** `/api/admin` requires a dashboard session (`requireDashboardAuth` — USER/APP JWT).
+- **Storefront:** site plugin + `/api/subscribe`, `/api/public-config`, `/api/product-context`.
+- **Secrets:** use `getSecret()` from `src/lib/smart-alerts/secrets.ts` (Wix Secrets Manager; env fallback in DEV only).

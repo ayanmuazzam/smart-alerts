@@ -17,20 +17,22 @@ import {
   cancelWaitingByProduct,
   findWaitingByProduct,
   markNotified,
-  resetPriceDropWatch,
 } from './subscriptions';
 import { getOverride, getProductSnapshot, getFirstProductSnapshot, loadOutOfStockProducts, upsertProductOverride } from './products';
 import { getDefaultEmailTemplate } from './constants';
 import { mapPool } from './map-pool';
+import { getSiteStoreName } from './site-timezone';
 
 /** Cap fan-out per webhook event to keep handlers under time limits. */
-const NOTIFY_MAX_PER_EVENT = 200;
+const NOTIFY_CHUNK_SIZE = 200;
+const NOTIFY_MAX_CHUNKS = 5; // up to 1000 waiters per event
 const NOTIFY_CONCURRENCY = 5;
 
 async function storeIdentity(): Promise<{ storeName: string; replyTo: string }> {
   const cfg = await getOrCreateConfig();
+  const storeName = await getSiteStoreName();
   return {
-    storeName: 'Store',
+    storeName,
     replyTo: cfg.sellerEmail || cfg.support?.supportEmail || '',
   };
 }
@@ -71,16 +73,6 @@ function resolveProductUpdateId(event: Record<string, any>): string {
   ).trim();
 }
 
-function resolveProductChangedFields(event: Record<string, any>): string[] {
-  const raw =
-    event.changedFields ||
-    event.modifiedFields ||
-    event.data?.changedFields ||
-    event.data?.modifiedFields ||
-    [];
-  return Array.isArray(raw) ? raw.map(String) : [];
-}
-
 async function deliverFromTemplate(opts: {
   triggerType: string;
   to: string;
@@ -89,7 +81,6 @@ async function deliverFromTemplate(opts: {
   tokens: Record<string, string | number | undefined>;
   buttonUrl?: string;
   productImage?: string;
-  skipCustomerLimit?: boolean;
 }) {
   const config = await getOrCreateConfig();
   const stored = (await getTemplate(opts.triggerType)) as Record<string, unknown>;
@@ -158,7 +149,6 @@ async function deliverFromTemplate(opts: {
     replyTo: identity.replyTo || config.sellerEmail,
     alertType: opts.alertType,
     productId: opts.productId,
-    skipCustomerLimit: opts.skipCustomerLimit,
   });
 }
 
@@ -170,23 +160,50 @@ async function sendFromTemplate(opts: {
   tokens: Record<string, string | number | undefined>;
   buttonUrl?: string;
   productImage?: string;
-  skipCustomerLimit?: boolean;
 }) {
   return deliverFromTemplate(opts);
 }
 
+type InventoryEntity = {
+  productId?: string;
+  variantId?: string;
+  inStock?: boolean;
+  availabilityStatus?: string;
+  variant?: { id?: string; _id?: string };
+};
+
+function resolveEventVariantId(
+  entity: InventoryEntity,
+  event?: {
+    data?: {
+      variantId?: string;
+      inventoryItem?: { variantId?: string };
+    };
+  },
+): string {
+  return String(
+    entity.variantId ||
+      entity.variant?.id ||
+      entity.variant?._id ||
+      event?.data?.variantId ||
+      event?.data?.inventoryItem?.variantId ||
+      '',
+  ).trim();
+}
+
 export async function handleStockStatusUpdated(event: {
   metadata?: { id?: string; entityId?: string };
-  entity?: { productId?: string; inStock?: boolean; availabilityStatus?: string };
+  entity?: InventoryEntity;
   data?: {
     productId?: string;
+    variantId?: string;
     inStock?: boolean;
     availabilityStatus?: string;
-    currentEntity?: { productId?: string; inStock?: boolean; availabilityStatus?: string };
+    inventoryItem?: { variantId?: string };
+    currentEntity?: InventoryEntity;
   };
-  // SDK / webhook envelope variants
   entityId?: string;
-  updatedEvent?: { currentEntityAsJson?: { productId?: string; inStock?: boolean; availabilityStatus?: string } };
+  updatedEvent?: { currentEntityAsJson?: InventoryEntity };
 }) {
   const eventId = event.metadata?.id || '';
   if (await markEventProcessed(eventId, 'inventory_stock_status_updated')) return;
@@ -206,19 +223,30 @@ export async function handleStockStatusUpdated(event: {
     return;
   }
 
+  const variantId = resolveEventVariantId(entity, event);
   await stampSyncEvent('inventory_stock_status_updated');
   await processInventoryRestock(productId, {
-    eventInStock: resolveInStockFlag(entity.inStock ?? event.data?.inStock, entity.availabilityStatus ?? event.data?.availabilityStatus),
+    variantId,
+    eventInStock: resolveInStockFlag(
+      entity.inStock ?? event.data?.inStock,
+      entity.availabilityStatus ?? event.data?.availabilityStatus,
+    ),
+    // Without a variant id, fan out to each waiting SKU from live catalog.
+    scoped: Boolean(variantId),
   });
 }
 
 /** V3 inventory quantity/status edits (merchant dashboard quantity changes). */
 export async function handleInventoryItemUpdated(event: {
   metadata?: { id?: string; entityId?: string };
-  entity?: { productId?: string; inStock?: boolean; availabilityStatus?: string };
-  data?: { currentEntity?: { productId?: string; inStock?: boolean; availabilityStatus?: string } };
+  entity?: InventoryEntity;
+  data?: {
+    variantId?: string;
+    inventoryItem?: { variantId?: string };
+    currentEntity?: InventoryEntity;
+  };
   entityId?: string;
-  updatedEvent?: { currentEntityAsJson?: { productId?: string; inStock?: boolean; availabilityStatus?: string } };
+  updatedEvent?: { currentEntityAsJson?: InventoryEntity };
 }) {
   const eventId = event.metadata?.id || '';
   if (await markEventProcessed(eventId, 'inventory_item_updated')) return;
@@ -234,9 +262,12 @@ export async function handleInventoryItemUpdated(event: {
     return;
   }
 
+  const variantId = resolveEventVariantId(entity, event);
   await stampSyncEvent('inventory_item_updated');
   await processInventoryRestock(productId, {
+    variantId,
     eventInStock: resolveInStockFlag(entity.inStock, entity.availabilityStatus),
+    scoped: Boolean(variantId),
   });
 }
 
@@ -244,10 +275,11 @@ export async function handleInventoryItemUpdated(event: {
 export async function handleInventoryVariantsChanged(event: {
   metadata?: { id?: string };
   data?: {
-    inventoryItem?: { productId?: string; externalId?: string };
+    inventoryItem?: { productId?: string; externalId?: string; variantId?: string };
     productId?: string;
+    variantId?: string;
   };
-  entity?: { productId?: string; externalId?: string };
+  entity?: { productId?: string; externalId?: string; variantId?: string };
 }) {
   const eventId = event.metadata?.id || '';
   if (await markEventProcessed(eventId, 'inventory_variants_changed')) return;
@@ -263,8 +295,19 @@ export async function handleInventoryVariantsChanged(event: {
     return;
   }
 
+  const variantId = String(
+    event.data?.inventoryItem?.variantId ||
+      event.data?.variantId ||
+      event.entity?.variantId ||
+      '',
+  ).trim();
+
   await stampSyncEvent('inventory_variants_changed');
-  await processInventoryRestock(productId);
+  // When V1 does not name a variant, evaluate each waiting SKU from live catalog.
+  await processInventoryRestock(productId, {
+    variantId,
+    scoped: Boolean(variantId),
+  });
 }
 
 function resolveInStockFlag(
@@ -280,21 +323,53 @@ function resolveInStockFlag(
 }
 
 /**
- * Shared restock path: load live catalog snapshot, notify waiting back-in-stock subscribers
- * when the product is in stock (and meets min qty).
+ * Shared restock path. When `scoped` + variantId, only that SKU is evaluated.
+ * Otherwise every distinct waiting variant (plus product-level `''`) is checked
+ * against its own live snapshot — never notify all waiters from variants[0].
  */
 async function processInventoryRestock(
   productId: string,
-  opts?: { eventInStock?: boolean },
+  opts?: { variantId?: string; eventInStock?: boolean; scoped?: boolean },
 ) {
   const config = await getOrCreateConfig();
-  const snapshot = await getProductSnapshot(productId);
-  const inStock = opts?.eventInStock ?? snapshot?.inStock ?? false;
+  const scopedVariant = String(opts?.variantId || '');
 
-  // Capture baseline before overwriting — inventory events may arrive after a price edit
-  // when Catalog product-updated webhooks are delayed or missing in local/dev.
-  const existingOverride = await getOverride(productId);
-  const previousPrice = Number(existingOverride?.lastKnownPrice || 0);
+  if (opts?.scoped) {
+    await processOneSkuInventory(productId, scopedVariant, config, {
+      eventInStock: opts.eventInStock,
+    });
+    return;
+  }
+
+  const variantIds = new Set<string>(['']);
+  if (isModuleEnabled(config, 'backInStock')) {
+    for (const w of await findWaitingByProduct(productId, 'back_in_stock')) {
+      variantIds.add(String(w.variantId || ''));
+    }
+  }
+  if (isModuleEnabled(config, 'priceDrop')) {
+    for (const w of await findWaitingByProduct(productId, 'price_drop')) {
+      variantIds.add(String(w.variantId || ''));
+    }
+  }
+  // Always refresh the merchant product-level row for tracker / restock dates.
+  variantIds.add('');
+
+  for (const vid of variantIds) {
+    await processOneSkuInventory(productId, vid, config, {});
+  }
+}
+
+async function processOneSkuInventory(
+  productId: string,
+  variantId: string,
+  config: SiteConfig,
+  opts: { eventInStock?: boolean },
+) {
+  const snapshot = await getProductSnapshot(productId, variantId || undefined);
+  const inStock = opts.eventInStock ?? snapshot?.inStock ?? false;
+
+  const existingOverride = await getOverride(productId, variantId);
   const previousStatus = String(existingOverride?.lastStockStatus || '').toUpperCase();
   const wasOut =
     previousStatus === 'OUT_OF_STOCK' ||
@@ -302,13 +377,10 @@ async function processInventoryRestock(
     previousStatus.includes('OUT');
 
   if (snapshot) {
-    await notifyPriceDropSubscribers(productId, snapshot, config, {
-      lastKnownPrice: previousPrice,
-    });
+    await notifyPriceDropSubscribers(productId, config, variantId);
   }
 
-  // Seller OOS: edge-trigger only (in-stock → out-of-stock). Stay-at-0 must not re-email.
-  // Going back in stock updates lastStockStatus so the next OOS can fire once again.
+  // Seller OOS: edge-trigger per SKU (in → out). Stay-at-0 must not re-email.
   if (
     inStock === false &&
     !wasOut &&
@@ -316,34 +388,47 @@ async function processInventoryRestock(
   ) {
     const to = config.sellerEmail;
     if (to) {
+      const priceLabel =
+        snapshot?.price != null && snapshot.price > 0
+          ? `$${Number(snapshot.price).toFixed(2)}`
+          : undefined;
       await sendFromTemplate({
         triggerType: 'seller_oos',
         to,
         alertType: 'seller_oos',
         productId,
-        tokens: { product_name: snapshot?.name || productId, product_url: snapshot?.url },
+        tokens: {
+          product_name: snapshot?.name || productId,
+          product_url: snapshot?.url,
+          product_price: priceLabel,
+        },
         buttonUrl: snapshot?.url,
-        skipCustomerLimit: true,
+        productImage: snapshot?.image || undefined,
       });
-      console.info(`[smart-alerts] seller OOS alert sent for ${productId}`);
+      console.info(
+        `[smart-alerts] seller OOS alert sent for ${productId} variant=${variantId || '(product)'}`,
+      );
     }
   } else if (inStock === false && wasOut) {
-    console.info(`[smart-alerts] skip seller OOS for ${productId}: already out of stock`);
+    console.info(
+      `[smart-alerts] skip seller OOS for ${productId} variant=${variantId || '(product)'}: already out`,
+    );
   }
 
   await upsertProductOverride({
     productId,
+    variantId,
     productName: snapshot?.name,
     lastKnownPrice: snapshot?.price,
     lastStockStatus: inStock ? 'IN_STOCK' : 'OUT_OF_STOCK',
   });
 
-  if (inStock && isModuleEnabled(config, 'backInStock')) {
-    await notifyBackInStockSubscribers(productId, snapshot);
+  if (inStock && isModuleEnabled(config, 'backInStock') && snapshot) {
+    await notifyBackInStockSubscribers(productId, snapshot, variantId);
   }
 
   if (isModuleEnabled(config, 'sellerLowStock') && snapshot) {
-    const override = await getOverride(productId);
+    const override = await getOverride(productId, variantId);
     const threshold = getLowStockThreshold(config, override as {
       useGlobalThreshold?: boolean;
       lowStockThreshold?: number;
@@ -354,17 +439,26 @@ async function processInventoryRestock(
         ? new Date(String(override.lastLowStockAlertAt))
         : null;
       if (!lastAlert || Number.isNaN(lastAlert.getTime())) {
+        const priceLabel =
+          snapshot.price != null && snapshot.price > 0
+            ? `$${Number(snapshot.price).toFixed(2)}`
+            : undefined;
         await sendFromTemplate({
           triggerType: 'seller_low_stock',
           to: config.sellerEmail,
           alertType: 'seller_low_stock',
           productId,
-          tokens: { product_name: snapshot.name, product_url: snapshot.url },
+          tokens: {
+            product_name: snapshot.name,
+            product_url: snapshot.url,
+            product_price: priceLabel,
+          },
           buttonUrl: snapshot.url,
-          skipCustomerLimit: true,
+          productImage: snapshot.image || undefined,
         });
         await upsertProductOverride({
           productId,
+          variantId,
           productName: snapshot.name,
           lastKnownPrice: snapshot.price,
           lastStockStatus: snapshot.stockStatus,
@@ -374,6 +468,7 @@ async function processInventoryRestock(
     } else if (qty != null && qty > threshold) {
       await upsertProductOverride({
         productId,
+        variantId,
         productName: snapshot.name,
         lastKnownPrice: snapshot.price,
         lastStockStatus: snapshot.stockStatus,
@@ -385,93 +480,129 @@ async function processInventoryRestock(
 
 async function notifyBackInStockSubscribers(
   productId: string,
-  snapshot: Awaited<ReturnType<typeof getProductSnapshot>>,
+  snapshot: NonNullable<Awaited<ReturnType<typeof getProductSnapshot>>>,
+  variantId: string,
 ) {
-  const watches = await findWaitingByProduct(productId, 'back_in_stock');
-  const batch = watches.slice(0, NOTIFY_MAX_PER_EVENT);
-  if (watches.length > batch.length) {
+  const watches = await findWaitingByProduct(productId, 'back_in_stock', variantId);
+  const max = NOTIFY_CHUNK_SIZE * NOTIFY_MAX_CHUNKS;
+  const queue = watches.slice(0, max);
+  if (watches.length > queue.length) {
     console.warn(
-      `[smart-alerts] back-in-stock notify ${productId}: capping ${batch.length}/${watches.length}`,
+      `[smart-alerts] back-in-stock notify ${productId} variant=${variantId || '(product)'}: ` +
+        `deferring ${watches.length - queue.length}`,
     );
   }
-  const results = await mapPool(batch, NOTIFY_CONCURRENCY, async (watch) => {
-    const ok = await sendFromTemplate({
-      triggerType: 'back_in_stock',
-      to: String(watch.email),
-      alertType: 'back_in_stock',
-      productId,
-      tokens: {
-        customer_name: String(watch.email).split('@')[0],
-        product_name: snapshot?.name || String(watch.productName || productId),
-        product_url: snapshot?.url || String(watch.productUrl || ''),
-      },
-      buttonUrl: snapshot?.url || String(watch.productUrl || ''),
-      productImage: snapshot?.image || String(watch.productImage || ''),
+
+  let sent = 0;
+  for (let i = 0; i < queue.length; i += NOTIFY_CHUNK_SIZE) {
+    const batch = queue.slice(i, i + NOTIFY_CHUNK_SIZE);
+    const results = await mapPool(batch, NOTIFY_CONCURRENCY, async (watch) => {
+      const ok = await sendFromTemplate({
+        triggerType: 'back_in_stock',
+        to: String(watch.email),
+        alertType: 'back_in_stock',
+        productId,
+        tokens: {
+          customer_name: String(watch.email).split('@')[0],
+          product_name: snapshot.name || String(watch.productName || productId),
+          product_url: snapshot.url || String(watch.productUrl || ''),
+        },
+        buttonUrl: snapshot.url || String(watch.productUrl || ''),
+        productImage: snapshot.image || String(watch.productImage || ''),
+      });
+      if (ok) await markNotified(String(watch._id));
+      return ok;
     });
-    await markNotified(String(watch._id));
-    return ok;
-  });
-  const sent = results.filter(Boolean).length;
-  console.info(`[smart-alerts] back-in-stock notify ${productId}: ${sent}/${batch.length} sent`);
+    sent += results.filter(Boolean).length;
+  }
+  console.info(
+    `[smart-alerts] back-in-stock notify ${productId} variant=${variantId || '(product)'}: ` +
+      `${sent}/${queue.length} sent`,
+  );
   return sent;
 }
 
 /**
- * Notify waiting price-drop watchers when current price is below their baseline.
- * Baseline prefers each subscription's watchedPrice, then lastKnownPrice fallback.
+ * Notify price-drop waiters for one SKU (or all SKUs when variantId omitted via fan-out).
+ * Live price is always loaded per waiter variant — never variants[0] for another SKU.
  */
 async function notifyPriceDropSubscribers(
   productId: string,
-  snapshot: Awaited<ReturnType<typeof getProductSnapshot>>,
   config: SiteConfig,
-  opts?: { lastKnownPrice?: number },
+  variantId?: string,
 ) {
-  if (!snapshot || !isModuleEnabled(config, 'priceDrop')) return 0;
-  const newPrice = Number(snapshot.price || 0);
-  if (!(newPrice > 0)) return 0;
+  if (!isModuleEnabled(config, 'priceDrop')) return 0;
 
-  const watches = await findWaitingByProduct(productId, 'price_drop');
+  const watches =
+    variantId !== undefined
+      ? await findWaitingByProduct(productId, 'price_drop', variantId)
+      : await findWaitingByProduct(productId, 'price_drop');
   if (watches.length === 0) return 0;
 
-  const lastKnown = Number(opts?.lastKnownPrice || 0);
-  const eligible = watches.filter((watch) => {
-    const watched = Number((watch as { watchedPrice?: number }).watchedPrice || 0);
-    const baseline = watched > 0 ? watched : lastKnown;
-    return meetsPriceDropRules(config, baseline, newPrice);
-  });
-  const batch = eligible.slice(0, NOTIFY_MAX_PER_EVENT);
-  if (eligible.length > batch.length) {
-    console.warn(
-      `[smart-alerts] price-drop notify ${productId}: capping ${batch.length}/${eligible.length}`,
-    );
+  const byVariant = new Map<string, typeof watches>();
+  for (const watch of watches) {
+    const key = String(watch.variantId || '');
+    const list = byVariant.get(key) || [];
+    list.push(watch);
+    byVariant.set(key, list);
   }
 
-  const results = await mapPool(batch, NOTIFY_CONCURRENCY, async (watch) => {
-    const ok = await sendFromTemplate({
-      triggerType: 'price_drop',
-      to: String(watch.email),
-      alertType: 'price_drop',
-      productId,
-      tokens: {
-        customer_name: String(watch.email).split('@')[0],
-        product_name: snapshot.name,
-        product_url: snapshot.url,
-        product_price: String(newPrice),
-      },
-      buttonUrl: snapshot.url,
-      productImage: snapshot.image,
-    });
-    if (ok) {
-      await resetPriceDropWatch(String(watch._id), newPrice);
-    }
-    return ok;
-  });
-  const sent = results.filter(Boolean).length;
+  let sent = 0;
+  for (const [vid, group] of byVariant) {
+    const snapshot = await getProductSnapshot(productId, vid || undefined);
+    if (!snapshot) continue;
+    const newPrice = Number(snapshot.price || 0);
+    if (!(newPrice > 0)) continue;
 
-  console.info(
-    `[smart-alerts] price-drop notify ${productId}: ${sent}/${batch.length} sent ` +
-      `(waiters=${watches.length}, price=${newPrice}, lastKnown=${lastKnown})`,
-  );
+    // Keep admin “current price” aligned with this SKU’s live catalog price.
+    await upsertProductOverride({
+      productId,
+      variantId: vid,
+      productName: snapshot.name,
+      lastKnownPrice: newPrice,
+      lastStockStatus: snapshot.stockStatus,
+    });
+
+    const eligible = group.filter((watch) => {
+      const watched = Number(watch.watchedPrice || 0);
+      if (!(watched > 0)) return false;
+      return meetsPriceDropRules(config, watched, newPrice);
+    });
+    const max = NOTIFY_CHUNK_SIZE * NOTIFY_MAX_CHUNKS;
+    const queue = eligible.slice(0, max);
+
+    for (let i = 0; i < queue.length; i += NOTIFY_CHUNK_SIZE) {
+      const batch = queue.slice(i, i + NOTIFY_CHUNK_SIZE);
+      const results = await mapPool(batch, NOTIFY_CONCURRENCY, async (watch) => {
+        const ok = await sendFromTemplate({
+          triggerType: 'price_drop',
+          to: String(watch.email),
+          alertType: 'price_drop',
+          productId,
+          tokens: {
+            customer_name: String(watch.email).split('@')[0],
+            product_name: snapshot.name || String(watch.productName || productId),
+            product_url: snapshot.url,
+            product_price: String(newPrice),
+          },
+          buttonUrl: snapshot.url,
+          productImage: snapshot.image,
+        });
+        if (ok) await markNotified(String(watch._id));
+        return ok;
+      });
+      sent += results.filter(Boolean).length;
+    }
+
+    const sampleWatched = group
+      .slice(0, 3)
+      .map((w) => Number(w.watchedPrice || 0))
+      .join(',');
+    console.info(
+      `[smart-alerts] price-drop notify ${productId} variant=${vid || '(product)'}: ` +
+        `${eligible.length}/${group.length} eligible, livePrice=${newPrice}, watchedSample=[${sampleWatched}]`,
+    );
+  }
   return sent;
 }
 
@@ -491,46 +622,42 @@ export async function handleProductUpdated(event: Record<string, any>) {
   await stampSyncEvent('product_updated');
   console.info(`[smart-alerts] product-updated ${productId}`);
 
-  const changed = resolveProductChangedFields(event);
   const config = await getOrCreateConfig();
-  const snapshot = await getProductSnapshot(productId);
-  if (!snapshot) return;
 
-  const override = await getOverride(productId);
-  const previousPrice = Number(override?.lastKnownPrice || 0);
-  const previousStatus = String(override?.lastStockStatus || '').toUpperCase();
-  const wasOut =
-    previousStatus === 'OUT_OF_STOCK' ||
-    previousStatus === 'OOS' ||
-    previousStatus.includes('OUT');
+  // Customer alerts only here (seller OOS/low-stock stay on inventory events).
+  // Evaluate each waiting SKU against its own live price/stock — never variants[0].
+  if (isModuleEnabled(config, 'priceDrop')) {
+    await notifyPriceDropSubscribers(productId, config);
+  }
 
-  // Restock via product update (some editors only emit product events, not inventory status).
-  if (snapshot.inStock && wasOut && isModuleEnabled(config, 'backInStock')) {
-    await notifyBackInStockSubscribers(productId, snapshot);
-  } else if (snapshot.inStock && isModuleEnabled(config, 'backInStock')) {
+  if (isModuleEnabled(config, 'backInStock')) {
     const watches = await findWaitingByProduct(productId, 'back_in_stock');
-    if (watches.length > 0) {
-      await notifyBackInStockSubscribers(productId, snapshot);
+    const byVariant = new Map<string, typeof watches>();
+    for (const w of watches) {
+      const key = String(w.variantId || '');
+      const list = byVariant.get(key) || [];
+      list.push(w);
+      byVariant.set(key, list);
+    }
+    for (const vid of byVariant.keys()) {
+      const snapshot = await getProductSnapshot(productId, vid || undefined);
+      if (snapshot?.inStock) {
+        await notifyBackInStockSubscribers(productId, snapshot, vid);
+      }
     }
   }
 
-  const looksLikePriceChange =
-    changed.length === 0 ||
-    changed.some((f) => /price/i.test(f)) ||
-    (previousPrice > 0 && snapshot.price > 0 && snapshot.price !== previousPrice);
-
-  if (looksLikePriceChange) {
-    await notifyPriceDropSubscribers(productId, snapshot, config, {
-      lastKnownPrice: previousPrice,
+  // Merchant product-level override (restock tracker) — not per customer variant.
+  const productSnap = await getProductSnapshot(productId);
+  if (productSnap) {
+    await upsertProductOverride({
+      productId,
+      variantId: '',
+      productName: productSnap.name,
+      lastKnownPrice: productSnap.price,
+      lastStockStatus: productSnap.stockStatus,
     });
   }
-
-  await upsertProductOverride({
-    productId,
-    productName: snapshot.name,
-    lastKnownPrice: snapshot.price,
-    lastStockStatus: snapshot.stockStatus,
-  });
 }
 
 export async function handleProductDeleted(event: {
@@ -610,7 +737,6 @@ export async function sendTestAlert(to: string) {
     },
     buttonUrl: productUrl || undefined,
     productImage: product?.image || undefined,
-    skipCustomerLimit: true,
   });
 }
 
@@ -618,10 +744,11 @@ export async function manualTriggerAlert(opts: {
   productId: string;
   subscriptionType: 'back_in_stock' | 'price_drop';
 }) {
-  const snapshot = await getProductSnapshot(opts.productId);
   const watches = await findWaitingByProduct(opts.productId, opts.subscriptionType);
   let sent = 0;
   for (const watch of watches) {
+    const vid = String(watch.variantId || '');
+    const snapshot = await getProductSnapshot(opts.productId, vid || undefined);
     const ok = await deliverFromTemplate({
       triggerType: opts.subscriptionType,
       to: String(watch.email),

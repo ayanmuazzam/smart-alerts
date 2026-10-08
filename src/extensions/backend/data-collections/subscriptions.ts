@@ -28,6 +28,7 @@ export default {
     itemRemove: 'PRIVILEGED',
     itemUpdate: 'PRIVILEGED',
   },
+  // Wix Data: max 3 indexes per collection, max 3 fields each.
   indexes: [
     {
       fields: [
@@ -40,7 +41,7 @@ export default {
       fields: [{ path: 'email' }, { path: 'productId' }, { path: 'state' }],
     },
     {
-      fields: [{ path: 'subscriptionType' }, { path: 'state' }, { path: 'cooldownUntil' }],
+      fields: [{ path: 'productId' }, { path: 'variantId' }, { path: 'state' }],
     },
   ],
   initialData: [],

@@ -96,6 +96,8 @@ export const DEFAULT_APPEARANCE = {
   timerShowSeconds: true,
   timerPulse: true,
   timerShowIcon: true,
+  /** Low-stock badge copy; `{x}` is replaced with live quantity. */
+  lowStockMessage: 'Only {x} left',
   colors: {
     primary: '#0F766E',
     secondary: '#134E4A',
@@ -103,7 +105,10 @@ export const DEFAULT_APPEARANCE = {
     text: '#0F172A',
     background: '#FFFFFF',
     buttonText: '#FFFFFF',
+    /** Low-stock urgency badge text color. */
     badge: '#000000',
+    /** Restock countdown timer accent (digits, pulse, borders). */
+    timer: '#000000',
     muted: '#64748B',
     inputBackground: '#FFFFFF',
     inputText: '#0F172A',
@@ -280,7 +285,7 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<string, EmailTemplateDefaults> = {
     body:
       'Heads up—{product_name} just reached 0 stock in {store_name}.\n\n' +
       'Consider restocking or updating your catalog so shoppers aren’t disappointed.',
-    showProductImage: false,
+    showProductImage: true,
     reviewQuote: '',
     buttonLabel: 'Open Catalog',
     showFeatures: false,
@@ -302,7 +307,7 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<string, EmailTemplateDefaults> = {
     body:
       '{product_name} dropped below your low-stock threshold at {store_name}.\n\n' +
       'Restock soon to keep sales moving and avoid going out of stock.',
-    showProductImage: false,
+    showProductImage: true,
     reviewQuote: '',
     buttonLabel: 'Review Inventory',
     showFeatures: false,

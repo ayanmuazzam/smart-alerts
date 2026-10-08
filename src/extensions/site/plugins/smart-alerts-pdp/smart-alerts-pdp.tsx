@@ -1,225 +1,24 @@
 import { fetchAppApi } from '../../lib/fetch-app-api';
-import { SITE_DEFAULT_MODULES } from '../../lib/defaults';
 import {
   SF,
-  buttonCssString,
+  formatLowStockMessage,
   modalInputCssString,
   modalShellCssString,
   pxNum,
 } from '../../../../lib/smart-alerts/storefront-styles';
-
-/** Inline appearance defaults — avoid importing app backend libs into the site plugin bundle. */
-const DEFAULT_MODULES = SITE_DEFAULT_MODULES;
-
-const DEFAULT_BUTTON = {
-  label: 'Notify Me',
-  backgroundColor: '#000000',
-  textColor: '#FFFFFF',
-  borderColor: '#FFFFFF',
-  borderWidth: 0,
-  borderRadius: 0,
-  widthMode: 'full' as 'auto' | 'full' | 'custom',
-  customWidth: '200px',
-  fontSize: 14,
-  fontWeight: 600,
-  paddingX: 48,
-  paddingY: 15,
-};
-
-const DEFAULT_APPEARANCE = {
-  timerStyle: 'pill' as string,
-  timerTheme: 'solid' as string,
-  timerPrefix: 'Back in stock in' as string,
-  timerShowSeconds: true as boolean,
-  timerPulse: true as boolean,
-  timerShowIcon: true as boolean,
-  stockThreshold: 10,
-  colors: {
-    primary: '#0F766E',
-    secondary: '#134E4A',
-    accent: '#14B8A6',
-    text: '#0F172A',
-    background: '#FFFFFF',
-    buttonText: '#FFFFFF',
-    badge: '#000000',
-    muted: '#64748B',
-    inputBackground: '#FFFFFF',
-    inputText: '#0F172A',
-    inputBorder: '#134E4A',
-    label: '#64748B',
-  },
-  buttons: {
-    notifyMe: {
-      ...DEFAULT_BUTTON,
-      label: 'Notify Me',
-    },
-    priceDrop: {
-      ...DEFAULT_BUTTON,
-      label: 'Watch for price drop',
-    },
-    modalSubmit: {
-      ...DEFAULT_BUTTON,
-      label: 'Subscribe',
-      widthMode: 'full' as const,
-    },
-  },
-  modal: {
-    borderRadius: 0,
-    borderWidth: 1,
-    padding: 48,
-    maxWidth: 575,
-    titleFontSize: 22,
-    descriptionFontSize: 15,
-    labelFontSize: 14,
-    inputBorderRadius: 0,
-    inputBorderWidth: 1,
-    inputPadding: 15,
-    notifyTitle: 'Notify me when back in stock',
-    notifyDescription: "We'll email you when this product is available again.",
-    priceTitle: 'Watch for price drop',
-    priceDescription: 'Get an email when the price of this product drops.',
-    emailLabel: 'Email',
-    emailPlaceholder: 'you@example.com',
-    phoneLabel: 'WhatsApp (optional)',
-    phonePlaceholder: '+1…',
-    notifyConsentLabel: 'I agree to receive stock alerts for this product.',
-    priceConsentLabel: 'Send me a price-drop alert.',
-    notifySuccessTitle: "You're subscribed!",
-    notifySuccessDescription: "We'll email you when it's back in stock.",
-    priceSuccessTitle: "You're watching this price!",
-    priceSuccessDescription: "We'll email you if the price drops.",
-    successAutoCloseMs: 2500,
-  },
-};
-
-type ButtonStyle = typeof DEFAULT_BUTTON;
-
-function buttonCss(btn: ButtonStyle, opts?: { forceFullWidth?: boolean }): string {
-  return buttonCssString(
-    {
-      ...btn,
-      backgroundColor: safeColor(btn.backgroundColor, '#000000'),
-      textColor: safeColor(btn.textColor, '#FFFFFF'),
-      borderColor: safeColor(btn.borderColor, '#FFFFFF'),
-    },
-    { forceFullWidth: opts?.forceFullWidth },
-  );
-}
-
-function escapeHtml(value: string): string {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-const HEX_COLOR = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
-function safeColor(value: unknown, fallback: string): string {
-  const raw = String(value ?? '').trim();
-  return HEX_COLOR.test(raw) ? raw : fallback;
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  let c = String(hex || '#000000').replace('#', '');
-  if (c.length === 3) c = c.split('').map((x) => x + x).join('');
-  const num = parseInt(c, 16);
-  if (isNaN(num)) return `rgba(0, 0, 0, ${alpha})`;
-  const r = (num >> 16) & 255;
-  const g = (num >> 8) & 255;
-  const b = num & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-function darkenHex(hex: string, percent: number): string {
-  let c = String(hex || '#000000').replace('#', '');
-  if (c.length === 3) c = c.split('').map((x) => x + x).join('');
-  const num = parseInt(c, 16);
-  if (isNaN(num)) return '#000000';
-  const r = Math.max(0, Math.floor(((num >> 16) & 255) * (1 - percent / 100)));
-  const g = Math.max(0, Math.floor(((num >> 8) & 255) * (1 - percent / 100)));
-  const b = Math.max(0, Math.floor((num & 255) * (1 - percent / 100)));
-  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
-}
-
-function isDarkColor(hex: string): boolean {
-  let c = String(hex || '').replace('#', '');
-  if (c.length === 3) c = c.split('').map((x) => x + x).join('');
-  const num = parseInt(c, 16);
-  if (isNaN(num)) return false;
-  const r = (num >> 16) & 255;
-  const g = (num >> 8) & 255;
-  const b = num & 255;
-  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  return luminance < 0.45;
-}
-
-function getTimerThemeTokens(theme: string, badge: string, buttonTextColor: string) {
-  const safeBadge = badge || '#000000';
-  const safeBtnText = buttonTextColor || '#FFFFFF';
-  const isDarkBadge = isDarkColor(safeBadge);
-
-  if (theme === 'solid') {
-    const bg = isDarkBadge
-      ? 'linear-gradient(135deg, #18181B 0%, #000000 100%)'
-      : `linear-gradient(135deg, ${safeBadge} 0%, ${darkenHex(safeBadge, 18)} 100%)`;
-    const border = isDarkBadge ? '1px solid #27272A' : `1px solid ${hexToRgba(safeBadge, 0.85)}`;
-    const textCol = isDarkBadge ? '#FFFFFF' : safeBtnText;
-    return {
-      bg,
-      border,
-      textColor: textCol,
-      numColor: textCol,
-      labelColor: 'rgba(255, 255, 255, 0.8)',
-      badgeShadow: isDarkBadge ? '0 4px 14px rgba(0, 0, 0, 0.25)' : `0 4px 14px ${hexToRgba(safeBadge, 0.3)}`,
-      tileBg: 'rgba(255, 255, 255, 0.22)',
-      tileBorder: '1px solid rgba(255, 255, 255, 0.35)',
-      pulseColor: '#FFFFFF',
-      separatorColor: 'rgba(255, 255, 255, 0.7)',
-    };
-  }
-
-  if (theme === 'dark') {
-    const accentCol = isDarkBadge ? '#FFFFFF' : safeBadge;
-    return {
-      bg: '#0F172A',
-      border: '1px solid rgba(255, 255, 255, 0.12)',
-      textColor: '#F8FAFC',
-      numColor: accentCol,
-      labelColor: '#94A3B8',
-      badgeShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
-      tileBg: '#1E293B',
-      tileBorder: '1px solid rgba(255, 255, 255, 0.08)',
-      pulseColor: accentCol,
-      separatorColor: 'rgba(255, 255, 255, 0.4)',
-    };
-  }
-
-  return {
-    bg: hexToRgba(safeBadge, 0.08),
-    border: `1.5px solid ${hexToRgba(safeBadge, 0.25)}`,
-    textColor: safeBadge,
-    numColor: safeBadge,
-    labelColor: hexToRgba(safeBadge, 0.75),
-    badgeShadow: `0 2px 10px ${hexToRgba(safeBadge, 0.08)}`,
-    tileBg: hexToRgba(safeBadge, 0.1),
-    tileBorder: `1px solid ${hexToRgba(safeBadge, 0.2)}`,
-    pulseColor: safeBadge,
-    separatorColor: hexToRgba(safeBadge, 0.6),
-  };
-}
-
-function mergeButtons(raw?: Partial<typeof DEFAULT_APPEARANCE.buttons>) {
-  return {
-    notifyMe: { ...DEFAULT_APPEARANCE.buttons.notifyMe, ...(raw?.notifyMe || {}) },
-    priceDrop: { ...DEFAULT_APPEARANCE.buttons.priceDrop, ...(raw?.priceDrop || {}) },
-    modalSubmit: { ...DEFAULT_APPEARANCE.buttons.modalSubmit, ...(raw?.modalSubmit || {}) },
-  };
-}
-
-function mergeModal(raw?: Partial<typeof DEFAULT_APPEARANCE.modal>) {
-  return { ...DEFAULT_APPEARANCE.modal, ...(raw || {}) };
-}
+import {
+  DEFAULT_APPEARANCE,
+  DEFAULT_MODULES,
+  buttonCss,
+  darkenHex,
+  escapeHtml,
+  getTimerThemeTokens,
+  hexToRgba,
+  isDarkColor,
+  mergeButtons,
+  mergeModal,
+  safeColor,
+} from './pdp-appearance';
 
 type ProductView = {
   name: string;
@@ -417,6 +216,8 @@ class SmartAlertsPdp extends HTMLElement {
     const primary = safeColor(colors.primary, '#0F766E');
     const buttonText = safeColor(colors.buttonText, '#fff');
     const badge = safeColor(colors.badge, '#000000');
+    // Timer accent falls back to badge for older saved configs without colors.timer.
+    const timerAccent = safeColor(colors.timer || colors.badge, badge);
     const muted = safeColor(colors.muted, '#64748B');
     const text = safeColor(colors.text, '#0F172A');
     const background = safeColor(colors.background, '#FFFFFF');
@@ -452,8 +253,14 @@ class SmartAlertsPdp extends HTMLElement {
         ? data.override.lowStockThreshold
         : (data.appearance?.stockThreshold ?? data.globalLowStockThreshold);
     if (data.modules.stockCounter && qty != null && qty > 0 && qty <= threshold) {
+      const msg = escapeHtml(
+        formatLowStockMessage(
+          data.appearance?.lowStockMessage ?? DEFAULT_APPEARANCE.lowStockMessage,
+          qty,
+        ),
+      );
       parts.push(
-        `<div style="margin:8px 0;font-weight:600;color:${badge};">Only ${qty} left</div>`,
+        `<div style="margin:8px 0;font-weight:600;color:${badge};">${msg}</div>`,
       );
     }
 
@@ -471,7 +278,7 @@ class SmartAlertsPdp extends HTMLElement {
       const showPulse = data.appearance?.timerPulse !== false;
       const showIcon = data.appearance?.timerShowIcon !== false;
 
-      const styles = getTimerThemeTokens(theme, badge, buttonText);
+      const styles = getTimerThemeTokens(theme, timerAccent, buttonText);
 
       const pulseDotHtml = showPulse
         ? `<span style="position:relative;display:inline-flex;align-items:center;justify-content:center;width:8px;height:8px;flex-shrink:0;">
@@ -493,47 +300,47 @@ class SmartAlertsPdp extends HTMLElement {
       if (style === 'blocks') {
         const isSolid = theme === 'solid';
         const isDark = theme === 'dark';
-        const isDarkBadge = isDarkColor(badge);
+        const isDarkAccent = isDarkColor(timerAccent);
 
-        const blockHeaderColor = isSolid || isDark ? '#1E293B' : badge;
-        const blockPulseColor = isDark && isDarkBadge ? '#FFFFFF' : badge;
-        const blockIconColor = isSolid ? (isDarkBadge ? '#FFFFFF' : badge) : styles.numColor;
+        const blockHeaderColor = isSolid || isDark ? '#1E293B' : timerAccent;
+        const blockPulseColor = isDark && isDarkAccent ? '#FFFFFF' : timerAccent;
+        const blockIconColor = isSolid ? (isDarkAccent ? '#FFFFFF' : timerAccent) : styles.numColor;
 
         const blockTileBg = isSolid
-          ? (isDarkBadge ? 'linear-gradient(135deg, #18181B 0%, #000000 100%)' : `linear-gradient(135deg, ${badge} 0%, ${darkenHex(badge, 14)} 100%)`)
+          ? (isDarkAccent ? 'linear-gradient(135deg, #18181B 0%, #000000 100%)' : `linear-gradient(135deg, ${timerAccent} 0%, ${darkenHex(timerAccent, 14)} 100%)`)
           : isDark
             ? '#0F172A'
-            : hexToRgba(badge, 0.08);
+            : hexToRgba(timerAccent, 0.08);
 
         const blockTileBorder = isSolid
-          ? (isDarkBadge ? '1px solid #27272A' : `1px solid ${darkenHex(badge, 22)}`)
+          ? (isDarkAccent ? '1px solid #27272A' : `1px solid ${darkenHex(timerAccent, 22)}`)
           : isDark
             ? '1px solid rgba(255, 255, 255, 0.12)'
-            : `1.5px solid ${hexToRgba(badge, 0.25)}`;
+            : `1.5px solid ${hexToRgba(timerAccent, 0.25)}`;
 
         const blockNumColor = isSolid
           ? '#FFFFFF'
           : isDark
-            ? (isDarkBadge ? '#FFFFFF' : badge)
-            : badge;
+            ? (isDarkAccent ? '#FFFFFF' : timerAccent)
+            : timerAccent;
 
         const blockLabelColor = isSolid
           ? 'rgba(255, 255, 255, 0.85)'
           : isDark
             ? '#94A3B8'
-            : hexToRgba(badge, 0.75);
+            : hexToRgba(timerAccent, 0.75);
 
         const blockSeparatorColor = isSolid
-          ? (isDarkBadge ? '#0F172A' : badge)
+          ? (isDarkAccent ? '#0F172A' : timerAccent)
           : isDark
             ? '#64748B'
-            : hexToRgba(badge, 0.6);
+            : hexToRgba(timerAccent, 0.6);
 
         const blockTileShadow = isSolid
-          ? (isDarkBadge ? '0 3px 10px rgba(0, 0, 0, 0.35)' : `0 3px 10px ${hexToRgba(badge, 0.35)}`)
+          ? (isDarkAccent ? '0 3px 10px rgba(0, 0, 0, 0.35)' : `0 3px 10px ${hexToRgba(timerAccent, 0.35)}`)
           : isDark
             ? '0 3px 8px rgba(0, 0, 0, 0.25)'
-            : `0 2px 6px ${hexToRgba(badge, 0.08)}`;
+            : `0 2px 6px ${hexToRgba(timerAccent, 0.08)}`;
 
         const blockPulseDotHtml = showPulse
           ? `<span style="position:relative;display:inline-flex;align-items:center;justify-content:center;width:8px;height:8px;flex-shrink:0;">
@@ -867,12 +674,15 @@ class SmartAlertsPdp extends HTMLElement {
       }
       if (msg) msg.textContent = '';
       try {
+        // Re-read selection at click time so switching variants doesn't reuse a stale row.
+        const liveVariantId =
+          this.getAttribute('selected-variant-id') || product.variantId || '';
         const res = await this.apiFetch('/api/subscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             productId: product.productId,
-            variantId: product.variantId,
+            variantId: liveVariantId,
             subscriptionType: 'back_in_stock',
             email,
             phone: phone || undefined,
@@ -946,17 +756,34 @@ class SmartAlertsPdp extends HTMLElement {
       }
       if (msg) msg.textContent = '';
       try {
+        // Fresh variant + catalog price at submit (server also re-reads live price).
+        const liveVariantId =
+          this.getAttribute('selected-variant-id') || product.variantId || '';
+        let watchedPrice = Number(product.price || 0);
+        try {
+          const fresh = await loadContext(
+            (p) => this.endpoint(p),
+            (p, init) => this.apiFetch(p, init),
+            product.productId,
+            liveVariantId,
+          );
+          if (fresh?.product?.price != null && Number(fresh.product.price) > 0) {
+            watchedPrice = Number(fresh.product.price);
+          }
+        } catch {
+          /* keep rendered price */
+        }
         const res = await this.apiFetch('/api/subscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             productId: product.productId,
-            variantId: product.variantId,
+            variantId: liveVariantId,
             subscriptionType: 'price_drop',
             email,
             phone: phone || undefined,
             consent,
-            watchedPrice: product.price,
+            watchedPrice,
           }),
         });
         const json = await res.json();

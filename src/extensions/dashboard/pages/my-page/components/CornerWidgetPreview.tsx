@@ -5,6 +5,7 @@ import { DEFAULT_APPEARANCE } from '../../../../../lib/smart-alerts/constants';
 import {
   SF,
   buttonReactStyle,
+  formatLowStockMessage,
   modalInputReactStyle,
   modalShellReactStyle,
   pxNum,
@@ -21,6 +22,7 @@ export type WidgetPreviewAppearance = {
   timerPulse?: boolean;
   timerShowIcon?: boolean;
   stockThreshold?: number;
+  lowStockMessage?: string;
   colors?: Record<string, string>;
   buttons?: {
     notifyMe?: Partial<ButtonStyle>;
@@ -216,6 +218,7 @@ export function CornerWidgetPreview({
   const primary = colors.primary || '#0F766E';
   const buttonTextColor = colors.buttonText || '#FFFFFF';
   const badge = colors.badge || '#000000';
+  const timerAccent = colors.timer || colors.badge || '#000000';
   const muted = colors.muted || '#64748B';
   const text = colors.text || '#0F172A';
   const background = colors.background || '#FFFFFF';
@@ -233,6 +236,10 @@ export function CornerWidgetPreview({
   const timerPulse = appearance?.timerPulse !== false;
   const timerShowIcon = appearance?.timerShowIcon !== false;
   const stockThreshold = Number(appearance?.stockThreshold ?? 10);
+  const lowStockMessage = formatLowStockMessage(
+    appearance?.lowStockMessage ?? DEFAULT_APPEARANCE.lowStockMessage,
+    stockThreshold,
+  );
 
   const notifyBtn = {
     ...DEFAULT_APPEARANCE.buttons.notifyMe,
@@ -258,53 +265,53 @@ export function CornerWidgetPreview({
     const hours = 12;
     const mins = 30;
     const secs = demoSecs;
-    const styles = getTimerThemeTokens(timerTheme, badge, buttonTextColor);
+    const styles = getTimerThemeTokens(timerTheme, timerAccent, buttonTextColor);
 
     // Style 1: Digital Blocks
     if (timerStyle === 'blocks') {
       const isSolid = timerTheme === 'solid';
       const isDark = timerTheme === 'dark';
-      const isDarkBadge = isDarkColor(badge);
+      const isDarkAccent = isDarkColor(timerAccent);
 
-      const blockHeaderColor = isSolid || isDark ? '#1E293B' : badge;
-      const blockPulseColor = isDark && isDarkBadge ? '#FFFFFF' : badge;
-      const blockIconColor = isSolid ? (isDarkBadge ? '#FFFFFF' : badge) : styles.numColor;
+      const blockHeaderColor = isSolid || isDark ? '#1E293B' : timerAccent;
+      const blockPulseColor = isDark && isDarkAccent ? '#FFFFFF' : timerAccent;
+      const blockIconColor = isSolid ? (isDarkAccent ? '#FFFFFF' : timerAccent) : styles.numColor;
 
       const blockTileBg = isSolid
-        ? (isDarkBadge ? 'linear-gradient(135deg, #18181B 0%, #000000 100%)' : `linear-gradient(135deg, ${badge} 0%, ${darkenHex(badge, 14)} 100%)`)
+        ? (isDarkAccent ? 'linear-gradient(135deg, #18181B 0%, #000000 100%)' : `linear-gradient(135deg, ${timerAccent} 0%, ${darkenHex(timerAccent, 14)} 100%)`)
         : isDark
           ? '#0F172A'
-          : hexToRgba(badge, 0.08);
+          : hexToRgba(timerAccent, 0.08);
 
       const blockTileBorder = isSolid
-        ? (isDarkBadge ? '1px solid #27272A' : `1px solid ${darkenHex(badge, 22)}`)
+        ? (isDarkAccent ? '1px solid #27272A' : `1px solid ${darkenHex(timerAccent, 22)}`)
         : isDark
           ? '1px solid rgba(255, 255, 255, 0.12)'
-          : `1.5px solid ${hexToRgba(badge, 0.25)}`;
+          : `1.5px solid ${hexToRgba(timerAccent, 0.25)}`;
 
       const blockNumColor = isSolid
         ? '#FFFFFF'
         : isDark
-          ? (isDarkBadge ? '#FFFFFF' : badge)
-          : badge;
+          ? (isDarkAccent ? '#FFFFFF' : timerAccent)
+          : timerAccent;
 
       const blockLabelColor = isSolid
         ? 'rgba(255, 255, 255, 0.85)'
         : isDark
           ? '#94A3B8'
-          : hexToRgba(badge, 0.75);
+          : hexToRgba(timerAccent, 0.75);
 
       const blockSeparatorColor = isSolid
-        ? (isDarkBadge ? '#0F172A' : badge)
+        ? (isDarkAccent ? '#0F172A' : timerAccent)
         : isDark
           ? '#64748B'
-          : hexToRgba(badge, 0.6);
+          : hexToRgba(timerAccent, 0.6);
 
       const blockTileShadow = isSolid
-        ? (isDarkBadge ? '0 3px 10px rgba(0, 0, 0, 0.35)' : `0 3px 10px ${hexToRgba(badge, 0.35)}`)
+        ? (isDarkAccent ? '0 3px 10px rgba(0, 0, 0, 0.35)' : `0 3px 10px ${hexToRgba(timerAccent, 0.35)}`)
         : isDark
           ? '0 3px 8px rgba(0, 0, 0, 0.25)'
-          : `0 2px 6px ${hexToRgba(badge, 0.08)}`;
+          : `0 2px 6px ${hexToRgba(timerAccent, 0.08)}`;
 
       return (
         <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '6px' }}>
@@ -905,7 +912,7 @@ export function CornerWidgetPreview({
 
               {showLowStockBadge ? (
                 <div style={{ fontWeight: 700, color: badge, fontSize: '13px' }}>
-                  Only {stockThreshold} left
+                  {lowStockMessage}
                 </div>
               ) : null}
               {showRestockTimer ? (

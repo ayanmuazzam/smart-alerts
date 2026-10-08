@@ -388,6 +388,9 @@ export function StorefrontCustomizationScreen({
                 {activeTab === 'urgency' ? (
                   <UrgencySettingsPanel
                     stockThreshold={Number(appearance.stockThreshold ?? 10)}
+                    lowStockMessage={String(
+                      appearance.lowStockMessage ?? DEFAULT_APPEARANCE.lowStockMessage,
+                    )}
                     timerStyle={String(appearance.timerStyle || 'pill')}
                     timerTheme={String(appearance.timerTheme || 'solid')}
                     timerPrefix={String(appearance.timerPrefix ?? 'Back in stock in')}
@@ -395,10 +398,19 @@ export function StorefrontCustomizationScreen({
                     timerPulse={appearance.timerPulse !== false}
                     timerShowIcon={appearance.timerShowIcon !== false}
                     badgeColor={colors.badge || DEFAULT_APPEARANCE.colors.badge}
+                    timerColor={
+                      colors.timer || colors.badge || DEFAULT_APPEARANCE.colors.timer
+                    }
                     onStockThreshold={(n) =>
                       setConfig((c: any) => ({
                         ...c,
                         appearance: { ...c.appearance, stockThreshold: n },
+                      }))
+                    }
+                    onLowStockMessage={(msg) =>
+                      setConfig((c: any) => ({
+                        ...c,
+                        appearance: { ...c.appearance, lowStockMessage: msg },
                       }))
                     }
                     onTimerStyle={(id) =>
@@ -438,6 +450,7 @@ export function StorefrontCustomizationScreen({
                       }))
                     }
                     onBadgeColor={(color) => setPaletteColor('badge', color)}
+                    onTimerColor={(color) => setPaletteColor('timer', color)}
                   />
                 ) : null}
 

@@ -71,17 +71,35 @@ export const POST: APIRoute = async ({ request }) => {
       return Response.json({ error: 'Price drop is disabled' }, { status: 403 });
     }
 
-    const snapshot = await getProductSnapshot(productId, body.variantId);
+    // Prefer explicit client variantId (including when snapshot falls back).
+    const requestedVariantId = String(body.variantId ?? '').trim();
+    const snapshot = await getProductSnapshot(
+      productId,
+      requestedVariantId || undefined,
+    );
     if (!snapshot) {
       return Response.json({ error: 'Product not found' }, { status: 404 });
     }
 
+    const variantId = requestedVariantId || String(snapshot.variantId || '').trim();
+    // Always baseline from live catalog for this SKU — never a stale modal price.
     const watchedPrice =
-      body.watchedPrice != null ? Number(body.watchedPrice) : snapshot.price;
+      subscriptionType === 'price_drop'
+        ? Number(snapshot.price || 0)
+        : body.watchedPrice != null
+          ? Number(body.watchedPrice)
+          : Number(snapshot.price || 0);
+
+    if (subscriptionType === 'price_drop' && !(watchedPrice > 0)) {
+      return Response.json(
+        { error: 'Could not read a valid price for this variant' },
+        { status: 400 },
+      );
+    }
 
     const sub = await createSubscription({
       productId,
-      variantId: body.variantId || snapshot.variantId,
+      variantId,
       productName: snapshot.name,
       productUrl: snapshot.url,
       productImage: snapshot.image,
@@ -89,14 +107,14 @@ export const POST: APIRoute = async ({ request }) => {
       email,
       phone: body.phone,
       consent: Boolean(body.consent),
-      watchedPrice,
+      watchedPrice: subscriptionType === 'price_drop' ? watchedPrice : body.watchedPrice,
     });
 
-    // Seed catalog baseline so the first price drop after subscribe can compare.
+    // Seed per-variant baseline for admin “current price” + engine edge state.
     if (subscriptionType === 'price_drop' && watchedPrice > 0) {
       await upsertProductOverride({
         productId,
-        variantId: body.variantId || snapshot.variantId,
+        variantId,
         productName: snapshot.name,
         lastKnownPrice: watchedPrice,
         lastStockStatus: snapshot.stockStatus,

@@ -184,3 +184,15 @@ export function modalInputCssString(
     'font-family:inherit',
   ].join(';');
 }
+
+const DEFAULT_LOW_STOCK_MESSAGE = 'Only {x} left';
+
+/** Replace `{x}` / `{qty}` / `{stock}` with live quantity. */
+export function formatLowStockMessage(template: unknown, qty: number): string {
+  const raw = String(template ?? '').trim() || DEFAULT_LOW_STOCK_MESSAGE;
+  const n = String(qty);
+  return raw
+    .replace(/\{x\}/gi, n)
+    .replace(/\{qty\}/gi, n)
+    .replace(/\{stock\}/gi, n);
+}

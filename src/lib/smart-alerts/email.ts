@@ -198,17 +198,6 @@ export async function canSendAlert(config?: SiteConfig): Promise<{ ok: boolean; 
   return { ok: used < quota, used, remaining: Math.max(0, quota - used), quota };
 }
 
-async function countCustomerAlerts(to: string, since: Date): Promise<number> {
-  const query = auth.elevate(items.query);
-  const result = await query(COLLECTIONS.alerts)
-    .eq('to', to)
-    .eq('status', 'sent')
-    .ge('sentAt', since)
-    .limit(1)
-    .find({ returnTotalCount: true });
-  return result.totalCount ?? result.items.length;
-}
-
 export async function logAlert(entry: {
   alertType: AlertType | string;
   channel: string;
@@ -238,7 +227,6 @@ export async function sendTransactionalEmail(opts: {
   replyTo?: string;
   alertType: AlertType | string;
   productId?: string;
-  skipCustomerLimit?: boolean;
 }): Promise<boolean> {
   const config = await getOrCreateConfig();
   const quota = await canSendAlert(config);
@@ -252,26 +240,6 @@ export async function sendTransactionalEmail(opts: {
       errorMessage: 'Quota exceeded',
     });
     return false;
-  }
-
-  if (!opts.skipCustomerLimit) {
-    const lim = config.notificationLimits;
-    const day = await countCustomerAlerts(opts.to, new Date(Date.now() - 86_400_000));
-    const week = await countCustomerAlerts(opts.to, new Date(Date.now() - 7 * 86_400_000));
-    if (
-      day >= (lim.maxEmailPerCustomerPerDay || 3) ||
-      week >= (lim.maxEmailPerCustomerPerWeek || 10)
-    ) {
-      await logAlert({
-        alertType: opts.alertType,
-        channel: 'email',
-        to: opts.to,
-        status: 'skipped',
-        productId: opts.productId,
-        errorMessage: 'Customer notification limit',
-      });
-      return false;
-    }
   }
 
   try {

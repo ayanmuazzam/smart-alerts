@@ -7,6 +7,19 @@ import {
 import { auth } from '@wix/essentials';
 import { items } from '@wix/data';
 import { COLLECTIONS } from './constants';
+import {
+  type CatalogProductRaw,
+  enrichProductName,
+  extractProductImage,
+  extractProductUrl,
+  isAbsoluteHttpUrl,
+  mapV1SearchRow,
+  mapV3SearchRow,
+  pickVariant,
+  relativeProductPath,
+  variantKey,
+  variantSellPrice,
+} from './catalog-shapes';
 
 export type CatalogVersion = 'V1_CATALOG' | 'V3_CATALOG' | 'STORES_NOT_INSTALLED';
 
@@ -36,84 +49,36 @@ export type ProductSnapshot = {
   stockStatus: string;
 };
 
-/** Pull a usable https image URL from V1 or V3 product media shapes. */
-function extractProductImage(product: any): string {
-  const candidates = [
-    product?.media?.main?.url,
-    product?.media?.main?.thumbnail?.url,
-    product?.media?.main?.image?.url,
-    typeof product?.media?.main?.image === 'string' ? product.media.main.image : '',
-    product?.media?.itemsInfo?.items?.[0]?.url,
-    product?.media?.itemsInfo?.items?.[0]?.image?.url,
-    product?.media?.itemsInfo?.items?.[0]?.thumbnail?.url,
-    product?.media?.mainMedia?.image?.url,
-    product?.media?.items?.[0]?.image?.url,
-    product?.media?.items?.[0]?.url,
-  ];
-  for (const c of candidates) {
-    const s = String(c || '').trim();
-    if (s.startsWith('http://') || s.startsWith('https://')) return s;
-  }
-  // Wix media ids → static CDN URL when only an id is present
-  const mediaId =
-    product?.media?.main?._id ||
-    product?.media?.itemsInfo?.items?.[0]?._id ||
-    product?.media?.itemsInfo?.items?.[0]?.id ||
-    '';
-  if (mediaId && !String(mediaId).includes('://')) {
-    return `https://static.wixstatic.com/media/${mediaId}`;
-  }
-  return '';
+function unwrapProduct(result: unknown): CatalogProductRaw | null {
+  if (!result || typeof result !== 'object') return null;
+  const r = result as { product?: CatalogProductRaw };
+  return r.product || (result as CatalogProductRaw);
 }
 
-function isAbsoluteHttpUrl(value: unknown): boolean {
-  const s = String(value || '').trim();
-  return s.startsWith('http://') || s.startsWith('https://');
-}
-
-/** Absolute product page URL from V1/V3 shapes (relative paths alone are not enough for email). */
-function extractProductUrl(product: any): string {
-  const joinedV1 =
-    product?.productPageUrl?.base && product?.productPageUrl?.path
-      ? `${product.productPageUrl.base}${product.productPageUrl.path}`
-      : '';
-  const candidates = [
-    product?.url?.url,
-    typeof product?.url === 'string' ? product.url : '',
-    joinedV1,
-    product?.productPageUrl?.base,
-  ];
-  for (const c of candidates) {
-    if (isAbsoluteHttpUrl(c)) return String(c).trim();
-  }
-  return '';
-}
-
-async function resolveAbsoluteProductUrl(productId: string, product: any): Promise<string> {
+async function resolveAbsoluteProductUrl(
+  productId: string,
+  product: CatalogProductRaw,
+): Promise<string> {
   const direct = extractProductUrl(product);
   if (direct) return direct;
 
-  // V3 often returns a relative path — V1 productPageUrl.base+path is absolute.
   try {
     const getV1 = auth.elevate(products.getProduct);
-    const v1Result = (await getV1(productId)) as any;
-    const v1Product = v1Result?.product || v1Result;
+    const v1Product = unwrapProduct(await getV1(productId));
     const fromV1 = extractProductUrl(v1Product);
     if (fromV1) return fromV1;
   } catch {
     /* V1 unavailable on some catalogs */
   }
 
-  const relative = String(
-    product?.url?.url || product?.productPageUrl?.path || product?.slug || '',
-  ).trim();
+  const relative = relativeProductPath(product);
   if (!relative || isAbsoluteHttpUrl(relative)) return relative;
 
-  // Last resort: take site base from any V1 product that has productPageUrl.base
   try {
     const query = auth.elevate(products.queryProducts);
-    const result = await (query() as any).limit(1).find();
-    const base = String(result?.items?.[0]?.productPageUrl?.base || '').replace(/\/?$/, '/');
+    const result = await query().limit(1).find();
+    const first = (result?.items?.[0] || null) as CatalogProductRaw | null;
+    const base = String(first?.productPageUrl?.base || '').replace(/\/?$/, '/');
     if (isAbsoluteHttpUrl(base)) {
       const path = relative.replace(/^\//, '');
       const slugPath = path.includes('/') ? path : `product-page/${path}`;
@@ -134,33 +99,93 @@ export async function getProductSnapshot(
 
   if (version === 'V3_CATALOG') {
     const getProduct = auth.elevate(productsV3.getProduct);
-    const result = (await getProduct(productId, {
-      fields: ['CURRENCY', 'URL', 'MEDIA_ITEMS_INFO'] as never,
-    })) as any;
-    const product = result?.product || result;
+    const product = unwrapProduct(
+      await getProduct(productId, {
+        fields: [
+          'CURRENCY',
+          'URL',
+          'MEDIA_ITEMS_INFO',
+          'VARIANT_OPTION_CHOICE_NAMES',
+          'DISCOUNT_INFO',
+        ] as never,
+      }),
+    );
     if (!product) return null;
     const variants = product.variantsInfo?.variants || [];
-    const variant =
-      (variantId && variants.find((v: { id?: string }) => v.id === variantId)) || variants[0];
-    const amount = Number(variant?.price?.actualPrice?.amount || 0);
-    const availability = product.inventory?.availabilityStatus || 'IN_STOCK';
-    const quantity = await getInventoryQuantity(productId);
+    const requested = String(variantId || '').trim();
+    const multiSku = variants.length > 1;
+    const variant = pickVariant(variants, requested || undefined);
+    if (requested && !variant) {
+      console.warn(
+        `[smart-alerts] variant ${requested} not found on product ${productId}`,
+      );
+    }
+    // Keep product-level rows as variantId '' (merchant tracker); SKU rows use real ids.
+    const resolvedVariantId = requested || (multiSku ? '' : variantKey(variant));
+    const amount = variantSellPrice(variant);
+
+    let inStock: boolean;
+    let quantity: number | null;
+    let stockStatus: string;
+
+    if (requested) {
+      // Specific SKU — inventory item for that variantId.
+      const inv = await getInventoryItem(productId, requested);
+      if (inv) {
+        quantity = inv.quantity ?? null;
+        if (typeof inv.inStock === 'boolean') {
+          inStock = inv.inStock;
+        } else {
+          const status = String(inv.availabilityStatus || '').toUpperCase();
+          inStock = status !== 'OUT_OF_STOCK' && status !== '';
+          if (!status && quantity != null) inStock = quantity > 0;
+        }
+        stockStatus = String(
+          inv.availabilityStatus || (inStock ? 'IN_STOCK' : 'OUT_OF_STOCK'),
+        );
+      } else if (
+        variant?.inventoryStatus &&
+        typeof variant.inventoryStatus.inStock === 'boolean'
+      ) {
+        inStock = Boolean(variant.inventoryStatus.inStock);
+        quantity = null;
+        stockStatus = inStock ? 'IN_STOCK' : 'OUT_OF_STOCK';
+      } else {
+        stockStatus = 'OUT_OF_STOCK';
+        inStock = false;
+        quantity = null;
+      }
+    } else {
+      // Product-level / simple product: use catalog rollup (PARTIALLY = still sellable).
+      const availability = product.inventory?.availabilityStatus || 'IN_STOCK';
+      stockStatus = String(availability);
+      inStock =
+        availability === 'IN_STOCK' || availability === 'PARTIALLY_OUT_OF_STOCK';
+      if (!multiSku) {
+        const inv = await getInventoryItem(productId, variantKey(variant) || undefined);
+        quantity = inv?.quantity ?? null;
+        if (inv && typeof inv.inStock === 'boolean') inStock = inv.inStock;
+      } else {
+        quantity = null;
+      }
+    }
+
     return {
       productId,
-      variantId: variant?.id || '',
-      name: product.name || '',
+      variantId: resolvedVariantId,
+      name: enrichProductName(product.name || '', requested ? variant : undefined),
       url: await resolveAbsoluteProductUrl(productId, product),
       image: extractProductImage(product),
       price: amount,
-      inStock: availability === 'IN_STOCK' || availability === 'PARTIALLY_OUT_OF_STOCK',
+      inStock,
       quantity,
-      stockStatus: String(availability),
+      stockStatus,
     };
   }
 
+  // V1 catalogs: options/variants are not reliably exposed — stay product-level.
   const getProduct = auth.elevate(products.getProduct);
-  const result = (await getProduct(productId)) as any;
-  const product = result?.product || result;
+  const product = unwrapProduct(await getProduct(productId));
   if (!product) return null;
   const price = Number(product.priceData?.discountedPrice ?? product.priceData?.price ?? 0);
   const status = product.stock?.inventoryStatus || 'IN_STOCK';
@@ -182,7 +207,6 @@ export async function searchProducts(term: string, limit = 20) {
   if (version === 'STORES_NOT_INSTALLED') return [];
 
   if (version === 'V3_CATALOG') {
-    // Name lookup requires Search Products — Query Products does not support it.
     const search = auth.elevate(productsV3.searchProducts);
     const result = (await search(
       {
@@ -198,25 +222,19 @@ export async function searchProducts(term: string, limit = 20) {
         cursorPaging: { limit },
       } as never,
       { fields: ['CURRENCY', 'URL'] as never },
-    )) as { products?: any[] };
-    return (result.products || []).map((p) => ({
-      id: p._id!,
-      name: p.name || '',
-      stockStatus: p.inventory?.availabilityStatus || '',
-      price: Number(p.variantsInfo?.variants?.[0]?.price?.actualPrice?.amount || 0),
-    }));
+    )) as { products?: CatalogProductRaw[] };
+    return (result.products || [])
+      .map(mapV3SearchRow)
+      .filter((row) => Boolean(row.id));
   }
 
   const query = auth.elevate(products.queryProducts);
-  let builder: any = query();
+  let builder = query();
   if (term) builder = builder.startsWith('name', term);
   const result = await builder.limit(limit).find();
-  return ((result.items || []) as any[]).map((p) => ({
-    id: p._id!,
-    name: p.name || '',
-    stockStatus: p.stock?.inventoryStatus || '',
-    price: Number(p.priceData?.price || 0),
-  }));
+  return ((result.items || []) as CatalogProductRaw[])
+    .map(mapV1SearchRow)
+    .filter((row) => Boolean(row.id));
 }
 
 /** First catalog product — used for Send Test Alert preview content. */
@@ -230,13 +248,11 @@ export async function getFirstProductSnapshot(): Promise<ProductSnapshot | null>
   }
 }
 
-export async function loadOutOfStockProducts(limit = 50) {
+export async function loadOutOfStockProducts(limit = 50): Promise<CatalogProductRaw[]> {
   const version = await getCatalogVersion();
-  if (version === 'STORES_NOT_INSTALLED') return [] as any[];
+  if (version === 'STORES_NOT_INSTALLED') return [];
 
   if (version === 'V3_CATALOG') {
-    // inventory.availabilityStatus is filterable on Search Products only,
-    // not Query Products (unsupported filter → INVALID_ARGUMENT).
     const search = auth.elevate(productsV3.searchProducts);
     const result = (await search(
       {
@@ -246,18 +262,26 @@ export async function loadOutOfStockProducts(limit = 50) {
         cursorPaging: { limit },
       } as never,
       { fields: ['CURRENCY'] as never },
-    )) as { products?: any[] };
+    )) as { products?: CatalogProductRaw[] };
     return result.products || [];
   }
 
   const query = auth.elevate(products.queryProducts);
-  const builder: any = query();
-  const result = await builder.eq('stock.inventoryStatus', 'OUT_OF_STOCK').limit(limit).find();
+  // Nested stock filter is valid at runtime; SDK typings omit it.
+  const result = await (query() as { eq: (f: string, v: string) => { limit: (n: number) => { find: () => Promise<{ items?: CatalogProductRaw[] }> } } })
+    .eq('stock.inventoryStatus', 'OUT_OF_STOCK')
+    .limit(limit)
+    .find();
   return result.items || [];
 }
 
 export type TrackedSource = 'manual' | 'scan' | 'system';
 
+/**
+ * Upsert override for (productId, variantId).
+ * Merchant restock dates / tracker rows use variantId ''.
+ * Customer price-drop baselines may use a real variantId.
+ */
 export async function upsertProductOverride(data: {
   productId: string;
   variantId?: string;
@@ -295,10 +319,9 @@ export async function upsertProductOverride(data: {
         ? data.restockAt
           ? new Date(data.restockAt)
           : null
-        : prev?.restockAt ?? null,
+        : (prev?.restockAt ?? null),
     lastKnownPrice: data.lastKnownPrice ?? prev?.lastKnownPrice ?? 0,
     lastStockStatus: data.lastStockStatus || prev?.lastStockStatus || '',
-    // Default false so catalog seed / stock events do not flood Inventory Tracker.
     tracked: data.tracked !== undefined ? data.tracked : (prev?.tracked ?? false),
     trackedSource:
       data.trackedSource !== undefined
@@ -329,15 +352,55 @@ export async function getOverride(productId: string, variantId?: string) {
   return result.items[0] || null;
 }
 
-export async function getInventoryQuantity(productId: string): Promise<number | null> {
+/**
+ * Storefront urgency settings: prefer the selected-variant override, then
+ * fall back to the merchant product-level row (`variantId: ''`) for restock
+ * dates / thresholds. Customer price/stock alert rows stay variant-scoped.
+ */
+export async function getStorefrontOverride(productId: string, variantId?: string) {
+  const wanted = String(variantId || '');
+  const variantRow = wanted ? await getOverride(productId, wanted) : null;
+  const productRow = await getOverride(productId, '');
+  if (!variantRow && !productRow) return null;
+  return {
+    lowStockThreshold:
+      variantRow?.lowStockThreshold ?? productRow?.lowStockThreshold,
+    useGlobalThreshold:
+      variantRow?.useGlobalThreshold ?? productRow?.useGlobalThreshold,
+    restockAt: variantRow?.restockAt ?? productRow?.restockAt,
+  };
+}
+
+type InventoryItemRow = {
+  quantity?: number | null;
+  inStock?: boolean;
+  availabilityStatus?: string;
+  variantId?: string;
+  productId?: string;
+};
+
+export async function getInventoryItem(
+  productId: string,
+  variantId?: string,
+): Promise<InventoryItemRow | null> {
   try {
     const version = await getCatalogVersion();
     if (version !== 'V3_CATALOG') return null;
     const query = auth.elevate(inventoryItemsV3.queryInventoryItems);
-    const result = await query().eq('productId', productId).limit(1).find();
-    const item = result.items?.[0] as { quantity?: number } | undefined;
-    return item?.quantity ?? null;
+    let builder = query().eq('productId', productId);
+    const vid = String(variantId || '').trim();
+    if (vid) builder = builder.eq('variantId', vid);
+    const result = await builder.limit(1).find();
+    return (result.items?.[0] as InventoryItemRow | undefined) || null;
   } catch {
     return null;
   }
+}
+
+export async function getInventoryQuantity(
+  productId: string,
+  variantId?: string,
+): Promise<number | null> {
+  const item = await getInventoryItem(productId, variantId);
+  return item?.quantity ?? null;
 }

@@ -45,6 +45,7 @@ const LIST_FIELDS = [
   'email',
   'phone',
   'productId',
+  'variantId',
   'productName',
   'subscriptionType',
   'state',
@@ -185,18 +186,27 @@ export const GET: APIRoute = async ({ request }) => {
           try {
             const overrides = await query(COLLECTIONS.productOverrides)
               .hasSome('productId', productIds)
-              .fields('productId', 'lastKnownPrice')
+              .fields('productId', 'variantId', 'lastKnownPrice')
               .find();
             const priceMap = new Map<string, number>();
             for (const o of (overrides.items || []) as any[]) {
               if (o.productId && o.lastKnownPrice != null) {
-                priceMap.set(String(o.productId), Number(o.lastKnownPrice));
+                const key = `${o.productId}::${o.variantId || ''}`;
+                priceMap.set(key, Number(o.lastKnownPrice));
               }
             }
-            enrichedItems = result.items.map((item: any) => ({
-              ...item,
-              currentPrice: priceMap.get(item.productId) ?? item.watchedPrice ?? null,
-            }));
+            enrichedItems = result.items.map((item: any) => {
+              const key = `${item.productId}::${item.variantId || ''}`;
+              const productKey = `${item.productId}::`;
+              return {
+                ...item,
+                currentPrice:
+                  priceMap.get(key) ??
+                  priceMap.get(productKey) ??
+                  item.watchedPrice ??
+                  null,
+              };
+            });
           } catch {
             enrichedItems = result.items;
           }
@@ -496,8 +506,25 @@ export const POST: APIRoute = async ({ request }) => {
       const query = auth.elevate(items.query);
       const isPrice = type === 'price_drop';
       const fields = isPrice
-        ? ['email', 'productId', 'productName', 'state', 'subscriptionType', 'watchedPrice', 'phone']
-        : ['email', 'productId', 'productName', 'state', 'subscriptionType', 'phone'];
+        ? [
+            'email',
+            'productId',
+            'variantId',
+            'productName',
+            'state',
+            'subscriptionType',
+            'watchedPrice',
+            'phone',
+          ]
+        : [
+            'email',
+            'productId',
+            'variantId',
+            'productName',
+            'state',
+            'subscriptionType',
+            'phone',
+          ];
       const rows = await queryAllPages(
         (limit, skip) =>
           query(COLLECTIONS.subscriptions)
