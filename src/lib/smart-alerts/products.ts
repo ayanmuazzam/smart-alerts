@@ -16,6 +16,7 @@ import {
   isAbsoluteHttpUrl,
   mapV1SearchRow,
   mapV3SearchRows,
+  normalizeVariantId,
   pickVariant,
   relativeProductPath,
   splitEnrichedProductName,
@@ -23,6 +24,8 @@ import {
   variantKey,
   variantSellPrice,
 } from './catalog-shapes';
+
+export { normalizeVariantId } from './catalog-shapes';
 
 export type CatalogVersion = 'V1_CATALOG' | 'V3_CATALOG' | 'STORES_NOT_INSTALLED';
 
@@ -138,7 +141,7 @@ export async function getProductSnapshot(
     );
     if (!product) return null;
     const variants = product.variantsInfo?.variants || [];
-    const requested = String(variantId || '').trim();
+    const requested = normalizeVariantId(variantId);
     const multiSku = variants.length > 1;
     const variant = pickVariant(variants, requested || undefined);
     if (requested && !variant) {
@@ -146,13 +149,13 @@ export async function getProductSnapshot(
         `[smart-alerts] variant ${requested} not found on product ${productId}`,
       );
     }
-    // Keep product-level rows as variantId '' (merchant tracker); SKU rows use real ids.
-    const resolvedVariantId = requested || (multiSku ? '' : variantKey(variant));
-    const amount = variantSellPrice(variant);
 
     let inStock: boolean;
     let quantity: number | null;
     let stockStatus: string;
+    // Simple / no-option products often omit variantsInfo on PDP reads while
+    // Inventory Tracker still stores a real inventory variantId — resolve both.
+    let resolvedVariantId = requested;
 
     if (requested) {
       // Specific SKU — inventory item for that variantId.
@@ -181,20 +184,33 @@ export async function getProductSnapshot(
         inStock = false;
         quantity = null;
       }
-    } else {
-      // Product-level / simple product: use catalog rollup (PARTIALLY = still sellable).
+    } else if (multiSku) {
+      // Multi-SKU before selection: product rollup (PARTIALLY = still sellable).
       const availability = product.inventory?.availabilityStatus || 'IN_STOCK';
       stockStatus = String(availability);
       inStock =
         availability === 'IN_STOCK' || availability === 'PARTIALLY_OUT_OF_STOCK';
-      if (!multiSku) {
-        const inv = await getInventoryItem(productId, variantKey(variant) || undefined);
-        quantity = inv?.quantity ?? null;
-        if (inv && typeof inv.inStock === 'boolean') inStock = inv.inStock;
-      } else {
-        quantity = null;
+      quantity = null;
+      resolvedVariantId = '';
+    } else {
+      // Simple product (0–1 catalog variants): match Tracker via catalog or inventory id.
+      const catalogVid = variantKey(variant);
+      const inv = await getInventoryItem(productId, catalogVid || undefined);
+      resolvedVariantId =
+        catalogVid || normalizeVariantId(inv?.variantId) || '';
+      const availability = product.inventory?.availabilityStatus || 'IN_STOCK';
+      stockStatus = String(availability);
+      inStock =
+        availability === 'IN_STOCK' || availability === 'PARTIALLY_OUT_OF_STOCK';
+      quantity = inv?.quantity ?? null;
+      if (inv && typeof inv.inStock === 'boolean') inStock = inv.inStock;
+      else if (inv?.availabilityStatus) {
+        const status = String(inv.availabilityStatus).toUpperCase();
+        inStock = status !== 'OUT_OF_STOCK' && status !== '';
       }
     }
+
+    const amount = variantSellPrice(variant);
 
     return {
       productId,
@@ -218,7 +234,7 @@ export async function getProductSnapshot(
   const status = product.stock?.inventoryStatus || 'IN_STOCK';
   return {
     productId,
-    variantId: variantId || '',
+    variantId: normalizeVariantId(variantId),
     name: product.name || '',
     url: await resolveAbsoluteProductUrl(productId, product),
     image: extractProductImage(product),
@@ -356,10 +372,16 @@ export async function loadOutOfStockTrackRows(limit = 50): Promise<OutOfStockTra
 
     if (variants.length <= 1) {
       const v = variants[0];
+      // No-option products may have empty variantsInfo — use inventory variantId.
+      let vid = variantKey(v);
+      if (!vid) {
+        const inv = await getInventoryItem(productId);
+        vid = normalizeVariantId(inv?.variantId);
+      }
       const label = formatVariantChoices(v);
       rows.push({
         productId,
-        variantId: variantKey(v) || '',
+        variantId: vid,
         productName: label ? enrichProductName(productName, v) : productName,
         lastStockStatus: 'OUT_OF_STOCK',
         sku: v?.sku ? String(v.sku) : undefined,
@@ -502,13 +524,15 @@ export async function upsertProductOverride(data: {
   lastKnownPrice?: number;
   lastStockStatus?: string;
   lastLowStockAlertAt?: Date | string | null;
+  lastSellerOosAlertAt?: Date | string | null;
   tracked?: boolean;
   trackedSource?: TrackedSource;
 }) {
+  const cleanVariantId = normalizeVariantId(data.variantId);
   const query = auth.elevate(items.query);
   const existing = await query(COLLECTIONS.productOverrides)
     .eq('productId', data.productId)
-    .eq('variantId', data.variantId || '')
+    .eq('variantId', cleanVariantId)
     .limit(1)
     .find();
 
@@ -538,7 +562,7 @@ export async function upsertProductOverride(data: {
   const payload: Record<string, unknown> = {
     title: data.productName || data.productId,
     productId: data.productId,
-    variantId: data.variantId || '',
+    variantId: cleanVariantId,
     productName: data.productName || '',
     sku:
       data.sku !== undefined
@@ -570,6 +594,11 @@ export async function upsertProductOverride(data: {
       ? new Date(data.lastLowStockAlertAt)
       : null;
   }
+  if (data.lastSellerOosAlertAt !== undefined) {
+    payload.lastSellerOosAlertAt = data.lastSellerOosAlertAt
+      ? new Date(data.lastSellerOosAlertAt)
+      : null;
+  }
   if (data.restockAppliedAt !== undefined) {
     payload.restockAppliedAt = data.restockAppliedAt
       ? new Date(data.restockAppliedAt)
@@ -590,29 +619,117 @@ export async function getOverride(productId: string, variantId?: string) {
   const query = auth.elevate(items.query);
   const result = await query(COLLECTIONS.productOverrides)
     .eq('productId', productId)
-    .eq('variantId', variantId || '')
+    .eq('variantId', normalizeVariantId(variantId))
     .limit(1)
     .find();
   return result.items[0] || null;
 }
 
+type StorefrontOverrideFields = {
+  variantId?: string;
+  restockAt?: Date | string | null;
+  restockAction?: string | null;
+  lowStockThreshold?: number;
+  useGlobalThreshold?: boolean;
+};
+
+type SoleRestockFallback = StorefrontOverrideFields & {
+  /** True when this product has only one tracked Inventory Tracker row. */
+  isOnlyTracked: boolean;
+};
+
 /**
- * Storefront urgency settings: prefer the selected-variant override, then
- * fall back to the merchant product-level row (`variantId: ''`) for restock
- * dates / thresholds. Customer price/stock alert rows stay variant-scoped.
+ * Storefront urgency settings for simple products and multi-SKU variants.
+ *
+ * Resolution order:
+ * 1. Exact variant override (selected SKU / resolved simple-product variant)
+ * 2. Product-level merchant row (`variantId: ''`)
+ * 3. Sole scheduled restock row for this product — required for no-variant
+ *    products where catalog/PDP/inventory ids can disagree
+ *
+ * Never borrow another SKU's restockAt when multiple scheduled timers exist.
  */
 export async function getStorefrontOverride(productId: string, variantId?: string) {
-  const wanted = String(variantId || '');
-  const variantRow = wanted ? await getOverride(productId, wanted) : null;
-  const productRow = await getOverride(productId, '');
-  if (!variantRow && !productRow) return null;
+  const wanted = normalizeVariantId(variantId);
+  const variantRow = wanted
+    ? ((await getOverride(productId, wanted)) as StorefrontOverrideFields | null)
+    : null;
+  const productRow = (await getOverride(productId, '')) as StorefrontOverrideFields | null;
+
+  // Prefer the row that actually owns the schedule so restockAction matches restockAt.
+  const scheduledRow =
+    (variantRow?.restockAt ? variantRow : null) ||
+    (productRow?.restockAt ? productRow : null);
+
+  let restockAt = scheduledRow?.restockAt ?? null;
+  let restockAction = scheduledRow?.restockAction ?? null;
+  let lowStockThreshold =
+    variantRow?.lowStockThreshold ?? productRow?.lowStockThreshold;
+  let useGlobalThreshold =
+    variantRow?.useGlobalThreshold ?? productRow?.useGlobalThreshold;
+
+  if (!restockAt) {
+    const fallback = await findBestRestockOverride(productId, wanted);
+    if (fallback) {
+      restockAt = fallback.restockAt ?? null;
+      restockAction = fallback.restockAction ?? null;
+      if (lowStockThreshold == null) lowStockThreshold = fallback.lowStockThreshold;
+      if (useGlobalThreshold == null) {
+        useGlobalThreshold = fallback.useGlobalThreshold;
+      }
+    }
+  }
+
+  if (!variantRow && !productRow && !restockAt) return null;
   return {
-    lowStockThreshold:
-      variantRow?.lowStockThreshold ?? productRow?.lowStockThreshold,
-    useGlobalThreshold:
-      variantRow?.useGlobalThreshold ?? productRow?.useGlobalThreshold,
-    restockAt: variantRow?.restockAt ?? productRow?.restockAt,
+    lowStockThreshold,
+    useGlobalThreshold,
+    restockAt,
+    restockAction: normalizeRestockAction(restockAction),
   };
+}
+
+/**
+ * Pick a restock schedule for this product when exact variant lookup misses.
+ * Simple/no-variant products often have id drift across catalog vs inventory rows.
+ */
+async function findBestRestockOverride(
+  productId: string,
+  wantedVariantId = '',
+): Promise<SoleRestockFallback | null> {
+  try {
+    const query = auth.elevate(items.query);
+    const result = await query(COLLECTIONS.productOverrides)
+      .eq('productId', productId)
+      .limit(50)
+      .find();
+    const all = (result.items || []) as StorefrontOverrideFields[];
+    const withRestock = all.filter((row) => {
+      const at = row.restockAt;
+      if (!at) return false;
+      const t = new Date(at as string | Date).getTime();
+      return Number.isFinite(t);
+    });
+    if (!withRestock.length) return null;
+
+    const wanted = normalizeVariantId(wantedVariantId);
+    const matching = wanted
+      ? withRestock.filter((row) => normalizeVariantId(row.variantId) === wanted)
+      : [];
+    // Prefer exact variant match; otherwise any schedule on this product (simple SKUs).
+    const pool = matching.length ? matching : withRestock;
+    const now = Date.now();
+    pool.sort((a, b) => {
+      const ta = new Date(a.restockAt as string | Date).getTime();
+      const tb = new Date(b.restockAt as string | Date).getTime();
+      return ta - tb;
+    });
+    const future = pool.find((row) => new Date(row.restockAt as string | Date).getTime() >= now);
+    const picked = future || pool[pool.length - 1];
+    return { ...picked, isOnlyTracked: all.length === 1 };
+  } catch {
+    return null;
+  }
 }
 
 export type InventoryItemRow = {

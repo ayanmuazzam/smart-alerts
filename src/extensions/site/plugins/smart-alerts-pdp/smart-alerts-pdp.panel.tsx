@@ -8,8 +8,9 @@ const Panel: FC = () => {
       <SidePanel width="300" height="100vh">
         <SidePanel.Content>
           <Text>
-            Shows the low-stock urgency badge and restock countdown. Configure styling in the Smart
-            Alerts dashboard under Storefront Customization → Urgency &amp; Timers.
+            Shows the low-stock urgency badge and restock countdown (slot
+            product-page-details-2). Configure styling under Storefront Customization → Urgency
+            &amp; Timers.
           </Text>
         </SidePanel.Content>
       </SidePanel>

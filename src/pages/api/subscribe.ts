@@ -2,7 +2,11 @@ import type { APIRoute } from 'astro';
 import { createSubscription, addWhatsappQueue } from '../../lib/smart-alerts/subscriptions';
 import { getOrCreateConfig, isModuleEnabled } from '../../lib/smart-alerts/config';
 import type { SubscriptionType } from '../../lib/smart-alerts/constants';
-import { getProductSnapshot, upsertProductOverride } from '../../lib/smart-alerts/products';
+import {
+  getProductSnapshot,
+  normalizeVariantId,
+  upsertProductOverride,
+} from '../../lib/smart-alerts/products';
 import { isValidEmail, isValidE164Phone } from '../../lib/smart-alerts/sanitize';
 
 /** Simple per-isolate sliding window (not durable across workers). */
@@ -72,7 +76,7 @@ export const POST: APIRoute = async ({ request }) => {
     }
 
     // Prefer explicit client variantId (including when snapshot falls back).
-    const requestedVariantId = String(body.variantId ?? '').trim();
+    const requestedVariantId = normalizeVariantId(body.variantId);
     const snapshot = await getProductSnapshot(
       productId,
       requestedVariantId || undefined,
@@ -81,7 +85,8 @@ export const POST: APIRoute = async ({ request }) => {
       return Response.json({ error: 'Product not found' }, { status: 404 });
     }
 
-    const variantId = requestedVariantId || String(snapshot.variantId || '').trim();
+    const variantId =
+      requestedVariantId || normalizeVariantId(snapshot.variantId);
     // Always baseline from live catalog for this SKU — never a stale modal price.
     const watchedPrice =
       subscriptionType === 'price_drop'

@@ -9,5 +9,5 @@ export const SITE_DEFAULT_MODULES: Record<string, boolean> = {
   sellerOutOfStock: true,
   sellerLowStock: true,
   stockCounter: true,
-  restockCountdown: false,
+  restockCountdown: true,
 };

@@ -30,7 +30,6 @@ import {
   DEFAULT_MODULES,
   DEFAULT_APPEARANCE,
   DEFAULT_BRAND,
-  DEFAULT_SUPPORT,
   DEFAULT_QUOTA,
   DEFAULT_NOTIFICATION_LIMITS,
   DEFAULT_TRIGGER_RULES,
@@ -535,7 +534,6 @@ export const POST: APIRoute = async ({ request }) => {
         modules: { ...DEFAULT_MODULES },
         appearance: { ...DEFAULT_APPEARANCE },
         brand: { ...DEFAULT_BRAND },
-        support: { ...DEFAULT_SUPPORT },
         monthlyAlertQuota: DEFAULT_QUOTA,
         globalLowStockThreshold: 5,
         notificationLimits: {

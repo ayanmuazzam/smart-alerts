@@ -42,7 +42,6 @@ export function buildEmailHtml(opts: {
   secondaryColor?: string;
   logoUrl?: string;
   footerText?: string;
-  supportWhatsapp?: string;
   preheader?: string;
 }): string {
   const brandColor = safeHexColor(opts.brandColor, '#2563eb');
@@ -139,10 +138,6 @@ export function buildEmailHtml(opts: {
   const footerDisclaimer = escapeHtml(
     opts.footerText || 'You received this email because you signed up for alerts.',
   );
-  const wa = String(opts.supportWhatsapp || '').replace(/[^\d+]/g, '');
-  const waFooter = wa
-    ? `<p style="margin:8px 0 0 0;"><a href="https://wa.me/${wa.replace('+', '')}" style="color:${secondaryColor};text-decoration:underline;">WhatsApp Support</a></p>`
-    : '';
 
   const isCentered = opts.layout !== 'Classic';
   const contentAlign = isCentered ? 'center' : 'left';
@@ -173,7 +168,6 @@ export function buildEmailHtml(opts: {
     </div>
     <div style="background-color:#f9fafb;padding:20px;text-align:center;font-size:12px;color:#9ca3af;border-top:1px solid #e5e7eb;">
       <p style="margin:0;">${footerDisclaimer}</p>
-      ${waFooter}
     </div>
   </div>
 </body>
@@ -244,7 +238,7 @@ export async function sendTransactionalEmail(opts: {
 
   try {
     const fromName = opts.fromName || 'Smart Alerts';
-    const replyTo = opts.replyTo || config.sellerEmail || config.support?.supportEmail || undefined;
+    const replyTo = opts.replyTo || config.sellerEmail || undefined;
     // Native Wix Email Transmissions — async ACCEPTED ≠ inbox delivery.
     const wix = await sendWixTransactionalEmail({
       to: opts.to,

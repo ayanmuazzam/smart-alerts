@@ -69,7 +69,8 @@ export const DEFAULT_MODULES: Record<ModuleKey, boolean> = {
   sellerOutOfStock: true,
   sellerLowStock: true,
   stockCounter: true,
-  restockCountdown: false,
+  // On by default — Inventory Tracker copy promises timers when a restock date is set.
+  restockCountdown: true,
 };
 
 export const DEFAULT_STOREFRONT_BUTTON = {
@@ -197,11 +198,6 @@ export const DEFAULT_BRAND = {
   logoUrl: '',
   primaryColor: '#0F766E',
   secondaryColor: '#134E4A',
-};
-
-export const DEFAULT_SUPPORT = {
-  supportEmail: '',
-  supportWhatsapp: '',
 };
 
 export type EmailTemplateDefaults = {

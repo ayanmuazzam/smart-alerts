@@ -41,52 +41,92 @@ function normalizeAction(raw: unknown): RestockAction {
   return 'none';
 }
 
+const REVISION_RETRIES = 4;
+
+async function refreshInventoryItem(item: InventoryItemRow): Promise<InventoryItemRow> {
+  // Prefer the same inventory item id so we never hop to a different SKU mid-retry.
+  const id = String(item._id || item.id || '').trim();
+  if (id) {
+    try {
+      const query = auth.elevate(inventoryItemsV3.queryInventoryItems);
+      const result = await query().eq('_id', id).limit(1).find();
+      const raw = (result.items?.[0] as InventoryItemRow | undefined) || null;
+      if (raw) return { ...raw, _id: raw._id || raw.id };
+    } catch {
+      /* fall through */
+    }
+  }
+  const productId = String(item.productId || '').trim();
+  const variantId = String(item.variantId || '').trim();
+  if (productId) {
+    const fresh = await getInventoryItem(productId, variantId || undefined);
+    if (fresh?._id) return fresh;
+  }
+  throw new Error('Inventory item not found for product');
+}
+
 async function writeV3InventoryItem(
   item: InventoryItemRow,
   opts: { mode: 'in_stock' | 'in_stock_qty'; quantity?: number },
 ): Promise<void> {
-  if (!item?._id || item.revision == null) {
-    throw new Error('Inventory item not found for product');
-  }
-  const id = String(item._id);
-  const revision = String(item.revision);
-  const options = { reason: inventoryItemsV3.ReasonType.MANUAL };
+  let current = item;
+  let lastErr: unknown;
 
-  if (opts.mode === 'in_stock_qty') {
-    const qty = Math.max(0, Math.min(99999, Math.floor(Number(opts.quantity) || 0)));
-    if (qty <= 0) throw new Error('Restock quantity must be at least 1');
+  for (let attempt = 0; attempt < REVISION_RETRIES; attempt++) {
+    if (!current?._id || current.revision == null) {
+      throw new Error('Inventory item not found for product');
+    }
+    const id = String(current._id);
+    const revision = String(current.revision);
+    const options = { reason: inventoryItemsV3.ReasonType.MANUAL };
 
     try {
-      const update = auth.elevate(inventoryItemsV3.updateInventoryItem);
-      await update(id, { _id: id, revision, quantity: qty } as never, options as never);
-    } catch (err) {
-      if (!isForbidden(err)) throw err;
-      const current = Number(item.quantity ?? 0) || 0;
-      const delta = qty - current;
-      if (delta === 0) return;
-      if (delta < 0) throw inventoryWriteDeniedError(err);
-      try {
-        const inc = auth.elevate(inventoryItemsV3.bulkIncrementInventoryItems);
-        await inc([{ inventoryItemId: id, incrementBy: delta }], options as never);
-      } catch (incErr) {
-        throw inventoryWriteDeniedError(incErr);
+      if (opts.mode === 'in_stock_qty') {
+        const qty = Math.max(0, Math.min(99999, Math.floor(Number(opts.quantity) || 0)));
+        if (qty <= 0) throw new Error('Restock quantity must be at least 1');
+
+        try {
+          const update = auth.elevate(inventoryItemsV3.updateInventoryItem);
+          await update(id, { _id: id, revision, quantity: qty } as never, options as never);
+        } catch (err) {
+          if (!isForbidden(err)) throw err;
+          const fromQty = Number(current.quantity ?? 0) || 0;
+          const delta = qty - fromQty;
+          if (delta === 0) return;
+          if (delta < 0) throw inventoryWriteDeniedError(err);
+          try {
+            const inc = auth.elevate(inventoryItemsV3.bulkIncrementInventoryItems);
+            await inc([{ inventoryItemId: id, incrementBy: delta }], options as never);
+          } catch (incErr) {
+            throw inventoryWriteDeniedError(incErr);
+          }
+        }
+        return;
       }
+
+      try {
+        const update = auth.elevate(inventoryItemsV3.updateInventoryItem);
+        await update(id, { _id: id, revision, inStock: true } as never, options as never);
+      } catch (err) {
+        if (!isForbidden(err)) throw err;
+        try {
+          const inc = auth.elevate(inventoryItemsV3.bulkIncrementInventoryItems);
+          await inc([{ inventoryItemId: id, incrementBy: 1 }], options as never);
+        } catch (incErr) {
+          throw inventoryWriteDeniedError(incErr);
+        }
+      }
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (!isRevisionConflict(err) || attempt === REVISION_RETRIES - 1) throw err;
+      // Stores changed the item between read and write — refresh revision and retry.
+      await sleep(80 * (attempt + 1));
+      current = await refreshInventoryItem(current);
     }
-    return;
   }
 
-  try {
-    const update = auth.elevate(inventoryItemsV3.updateInventoryItem);
-    await update(id, { _id: id, revision, inStock: true } as never, options as never);
-  } catch (err) {
-    if (!isForbidden(err)) throw err;
-    try {
-      const inc = auth.elevate(inventoryItemsV3.bulkIncrementInventoryItems);
-      await inc([{ inventoryItemId: id, incrementBy: 1 }], options as never);
-    } catch (incErr) {
-      throw inventoryWriteDeniedError(incErr);
-    }
-  }
+  throw lastErr instanceof Error ? lastErr : new Error('Restock apply failed');
 }
 
 /**
@@ -274,17 +314,35 @@ async function applyOneRow(
   }
 }
 
+function errorStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  if ('status' in err) return Number((err as { status?: number }).status);
+  return undefined;
+}
+
+function errorAppCode(err: unknown): string {
+  if (!err || typeof err !== 'object' || !('details' in err)) return '';
+  const code = (err as { details?: { applicationError?: { code?: string | number } } }).details
+    ?.applicationError?.code;
+  return String(code ?? '');
+}
+
 function isForbidden(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const status = 'status' in err ? Number((err as { status?: number }).status) : undefined;
-  const code =
-    'details' in err
-      ? Number(
-          (err as { details?: { applicationError?: { code?: number } } }).details
-            ?.applicationError?.code,
-        )
-      : undefined;
-  return status === 403 || code === 403;
+  const status = errorStatus(err);
+  const code = errorAppCode(err);
+  return status === 403 || code === '403' || Number(code) === 403;
+}
+
+/** Optimistic-lock conflict from Inventory Items V3 update. */
+function isRevisionConflict(err: unknown): boolean {
+  const status = errorStatus(err);
+  const code = errorAppCode(err).toUpperCase();
+  const msg = err instanceof Error ? err.message : String(err || '');
+  return (
+    status === 409 ||
+    code === 'INVALID_REVISION' ||
+    /outdated revision|invalid_revision|revision violation/i.test(msg)
+  );
 }
 
 function inventoryWriteDeniedError(err: unknown): Error {
@@ -298,6 +356,12 @@ function formatRestockError(err: unknown): string {
       'site install has not granted WIX_STORES.INVENTORY_UPDATE yet. Fix: remove US Smart Alerts ' +
       'from the site → reinstall via npm run dev (Agree & Add) so the write scope is approved. ' +
       'Wait a few minutes after adding the permission if you just saved it.'
+    );
+  }
+  if (isRevisionConflict(err)) {
+    return (
+      'Inventory update hit a revision conflict after retries. Another edit changed stock at the ' +
+      'same time — open Inventory Tracker and try Apply due restocks again.'
     );
   }
   if (err instanceof Error && err.message) return err.message;

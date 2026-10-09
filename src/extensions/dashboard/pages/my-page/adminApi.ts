@@ -119,7 +119,8 @@ export const MODULE_META: ModuleMetaItem[] = [
     key: 'restockCountdown',
     group: 'URGENCY',
     title: 'Restock Countdown Timer',
-    description: 'Display an expected restock countdown timer on sold-out products.',
+    description:
+      'Display an expected restock countdown on sold-out products when a restock date is set in Inventory Tracker.',
     channel: 'Storefront',
     delivery: 'On-site',
     iconName: 'Timer',

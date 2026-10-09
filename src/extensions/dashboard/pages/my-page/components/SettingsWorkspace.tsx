@@ -9,7 +9,7 @@ import {
   Layout,
   NumberInput,
 } from '@wix/design-system';
-import { SettingsSmall, Email, Chat } from '@wix/wix-ui-icons-common';
+import { SettingsSmall, Email } from '@wix/wix-ui-icons-common';
 import { MonoIconBadge } from './MonoIconBadge';
 
 export interface SettingsWorkspaceProps {
@@ -60,18 +60,18 @@ export function SettingsWorkspace({
         </MonoIconBadge>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <span style={{ fontSize: '16px', fontWeight: 700, color: '#0F172A' }}>
-            Account &amp; Support Routing
+            Account &amp; Alert Routing
           </span>
           <span style={{ fontSize: '12.5px', color: '#64748B' }}>
-            Define where seller inventory alerts are dispatched and where customer reply inquiries are routed.
+            Define where seller inventory alerts are dispatched and set your monthly send quota.
           </span>
         </div>
       </div>
 
       <Card>
         <Card.Header
-          title="Communication & Support Channels"
-          subtitle="Email addresses and WhatsApp numbers used for notification delivery and customer support"
+          title="Seller alerts &amp; quota"
+          subtitle="Email used for manager inventory alerts and monthly outbound alert volume"
         />
         <Card.Divider />
         <Card.Content>
@@ -86,37 +86,6 @@ export function SettingsWorkspace({
                     setConfig((c: any) => ({ ...c, sellerEmail: e.target.value }))
                   }
                   placeholder="seller@yourstore.com"
-                />
-              </FormField>
-            </Cell>
-            <Cell span={6}>
-              <FormField label="Customer support email">
-                <Input
-                  prefix={<Email size="16" />}
-                  type="email"
-                  value={config.support?.supportEmail || ''}
-                  onChange={(e) =>
-                    setConfig((c: any) => ({
-                      ...c,
-                      support: { ...c.support, supportEmail: e.target.value },
-                    }))
-                  }
-                  placeholder="support@yourstore.com"
-                />
-              </FormField>
-            </Cell>
-            <Cell span={6}>
-              <FormField label="Support WhatsApp number (E.164 format)">
-                <Input
-                  prefix={<Chat size="16" />}
-                  value={config.support?.supportWhatsapp || ''}
-                  onChange={(e) =>
-                    setConfig((c: any) => ({
-                      ...c,
-                      support: { ...c.support, supportWhatsapp: e.target.value },
-                    }))
-                  }
-                  placeholder="+15551234567"
                 />
               </FormField>
             </Cell>
@@ -148,7 +117,6 @@ export function SettingsWorkspace({
               'general',
               {
                 sellerEmail: config.sellerEmail,
-                support: config.support,
                 monthlyAlertQuota: config.monthlyAlertQuota,
               },
               'Account settings saved',

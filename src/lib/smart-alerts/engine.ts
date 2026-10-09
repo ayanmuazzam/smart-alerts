@@ -39,7 +39,7 @@ async function storeIdentity(): Promise<{ storeName: string; replyTo: string }> 
   const storeName = await getSiteStoreName();
   return {
     storeName,
-    replyTo: cfg.sellerEmail || cfg.support?.supportEmail || '',
+    replyTo: cfg.sellerEmail || '',
   };
 }
 
@@ -144,7 +144,6 @@ async function deliverFromTemplate(opts: {
     secondaryColor: config.brand.secondaryColor,
     logoUrl: config.brand.logoUrl,
     footerText: footer,
-    supportWhatsapp: config.support?.supportWhatsapp,
     preheader,
   });
   return sendTransactionalEmail({
@@ -341,8 +340,10 @@ async function processInventoryRestock(
   const scopedVariant = String(opts?.variantId || '');
 
   if (opts?.scoped) {
+    // Event names a specific SKU — seller OOS may fire for that SKU only.
     await processOneSkuInventory(productId, scopedVariant, config, {
       eventInStock: opts.eventInStock,
+      enableSellerOos: true,
     });
     return;
   }
@@ -361,64 +362,94 @@ async function processInventoryRestock(
   // Always refresh the merchant product-level row for tracker / restock dates.
   variantIds.add('');
 
+  // Unscoped fan-out is for customer waitlists — do NOT seller-email every SKU.
+  // One product-level seller evaluation covers "item went OOS" without a variant id.
   for (const vid of variantIds) {
-    await processOneSkuInventory(productId, vid, config, {});
+    await processOneSkuInventory(productId, vid, config, {
+      enableSellerOos: false,
+    });
   }
+  await processOneSkuInventory(productId, '', config, {
+    eventInStock: opts?.eventInStock,
+    enableSellerOos: true,
+  });
+}
+
+function hasSellerOosMark(override: { lastSellerOosAlertAt?: unknown } | null | undefined): boolean {
+  if (!override?.lastSellerOosAlertAt) return false;
+  const t = new Date(override.lastSellerOosAlertAt as string | Date).getTime();
+  return Number.isFinite(t);
 }
 
 async function processOneSkuInventory(
   productId: string,
   variantId: string,
   config: SiteConfig,
-  opts: { eventInStock?: boolean },
+  opts: { eventInStock?: boolean; enableSellerOos?: boolean },
 ) {
   const snapshot = await getProductSnapshot(productId, variantId || undefined);
   const inStock = opts.eventInStock ?? snapshot?.inStock ?? false;
 
   const existingOverride = await getOverride(productId, variantId);
-  const previousStatus = String(existingOverride?.lastStockStatus || '').toUpperCase();
-  const wasOut =
-    previousStatus === 'OUT_OF_STOCK' ||
-    previousStatus === 'OOS' ||
-    previousStatus.includes('OUT');
+  const alreadySellerOosAlerted = hasSellerOosMark(existingOverride);
 
   if (snapshot) {
     await notifyPriceDropSubscribers(productId, config, variantId);
   }
 
-  // Seller OOS: edge-trigger per SKU (in → out). Stay-at-0 must not re-email.
-  if (
-    inStock === false &&
-    !wasOut &&
-    isModuleEnabled(config, 'sellerOutOfStock')
-  ) {
-    const to = config.sellerEmail;
-    if (to) {
-      const priceLabel =
-        snapshot?.price != null && snapshot.price > 0
-          ? `$${Number(snapshot.price).toFixed(2)}`
-          : undefined;
-      await sendFromTemplate({
-        triggerType: 'seller_oos',
-        to,
-        alertType: 'seller_oos',
+  // Seller OOS: one email per OOS cycle, keyed by lastSellerOosAlertAt.
+  // Mark is claimed before send; cleared only when the SKU is back in stock.
+  if (opts.enableSellerOos === true && isModuleEnabled(config, 'sellerOutOfStock')) {
+    if (inStock === false) {
+      if (alreadySellerOosAlerted) {
+        console.info(
+          `[smart-alerts] skip seller OOS for ${productId} variant=${variantId || '(product)'}: already marked`,
+        );
+      } else {
+        const to = config.sellerEmail;
+        // Claim the mark first so concurrent inventory events cannot double-send.
+        await upsertProductOverride({
+          productId,
+          variantId,
+          productName: snapshot?.name,
+          lastKnownPrice: snapshot?.price,
+          lastStockStatus: 'OUT_OF_STOCK',
+          lastSellerOosAlertAt: new Date(),
+        });
+        if (to) {
+          const priceLabel =
+            snapshot?.price != null && snapshot.price > 0
+              ? `$${Number(snapshot.price).toFixed(2)}`
+              : undefined;
+          await sendFromTemplate({
+            triggerType: 'seller_oos',
+            to,
+            alertType: 'seller_oos',
+            productId,
+            tokens: {
+              product_name: snapshot?.name || productId,
+              product_url: snapshot?.url,
+              product_price: priceLabel,
+            },
+            buttonUrl: snapshot?.url,
+            productImage: snapshot?.image || undefined,
+          });
+          console.info(
+            `[smart-alerts] seller OOS alert sent for ${productId} variant=${variantId || '(product)'}`,
+          );
+        }
+      }
+    } else if (alreadySellerOosAlerted) {
+      // Back in stock — clear mark so the next OOS cycle can alert again.
+      await upsertProductOverride({
         productId,
-        tokens: {
-          product_name: snapshot?.name || productId,
-          product_url: snapshot?.url,
-          product_price: priceLabel,
-        },
-        buttonUrl: snapshot?.url,
-        productImage: snapshot?.image || undefined,
+        variantId,
+        productName: snapshot?.name,
+        lastKnownPrice: snapshot?.price,
+        lastStockStatus: 'IN_STOCK',
+        lastSellerOosAlertAt: null,
       });
-      console.info(
-        `[smart-alerts] seller OOS alert sent for ${productId} variant=${variantId || '(product)'}`,
-      );
     }
-  } else if (inStock === false && wasOut) {
-    console.info(
-      `[smart-alerts] skip seller OOS for ${productId} variant=${variantId || '(product)'}: already out`,
-    );
   }
 
   await upsertProductOverride({
@@ -427,6 +458,8 @@ async function processOneSkuInventory(
     productName: snapshot?.name,
     lastKnownPrice: snapshot?.price,
     lastStockStatus: inStock ? 'IN_STOCK' : 'OUT_OF_STOCK',
+    // Clear mark whenever live stock is sellable (restock / merchant edit).
+    ...(inStock ? { lastSellerOosAlertAt: null } : {}),
   });
 
   if (inStock && isModuleEnabled(config, 'backInStock') && snapshot) {
@@ -717,10 +750,9 @@ export async function resyncCatalogCache(
     }
   }
   const now = new Date().toISOString();
-  const current = await getOrCreateConfig();
+  // Partial syncSettings patch — preserves sellerEmail and other account fields.
   await updateConfig({
     syncSettings: {
-      ...current.syncSettings,
       cacheRefresh: 'realtime',
       lastCacheRefreshAt: now,
       lastEventAt: now,

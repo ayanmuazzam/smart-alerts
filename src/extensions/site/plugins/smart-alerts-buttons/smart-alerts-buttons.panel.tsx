@@ -8,8 +8,8 @@ const Panel: FC = () => {
       <SidePanel width="300" height="100vh">
         <SidePanel.Content>
           <Text>
-            Shows Notify Me and Watch for price drop. Configure button styles and modals in the
-            Smart Alerts dashboard under Storefront Customization.
+            Shows Notify Me and Watch for price drop (slot product-page-details-8). Configure
+            styles in the Smart Alerts dashboard under Storefront Customization.
           </Text>
         </SidePanel.Content>
       </SidePanel>

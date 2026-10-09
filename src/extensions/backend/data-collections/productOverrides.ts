@@ -21,6 +21,8 @@ export default {
     { type: 'NUMBER', key: 'lastKnownPrice', displayName: 'Last Known Price' },
     { type: 'TEXT', key: 'lastStockStatus', displayName: 'Last Stock Status' },
     { type: 'DATETIME', key: 'lastLowStockAlertAt', displayName: 'Last Low Stock Alert At' },
+    // Set when store-manager OOS email is sent; cleared when SKU is back in stock.
+    { type: 'DATETIME', key: 'lastSellerOosAlertAt', displayName: 'Last Seller OOS Alert At' },
     { type: 'BOOLEAN', key: 'tracked', displayName: 'Tracked' },
     // 'manual' = Track Product button; 'scan' = Scan Out-of-Stock; omit/system = cache only
     { type: 'TEXT', key: 'trackedSource', displayName: 'Tracked Source' },

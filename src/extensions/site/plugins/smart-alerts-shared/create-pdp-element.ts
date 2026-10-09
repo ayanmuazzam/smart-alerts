@@ -1,4 +1,5 @@
 import { fetchAppApi } from '../../lib/fetch-app-api';
+import { normalizeVariantId } from '../../../../lib/smart-alerts/catalog-shapes';
 import {
   SF,
   formatLowStockMessage,
@@ -46,6 +47,8 @@ type ContextView = {
   };
   override: {
     restockAt?: string;
+    /** none | in_stock | in_stock_qty — from Inventory Tracker */
+    restockAction?: 'none' | 'in_stock' | 'in_stock_qty';
     lowStockThreshold?: number;
     useGlobalThreshold?: boolean;
   } | null;
@@ -59,7 +62,8 @@ async function loadContext(
   variantId: string,
 ): Promise<ContextView | null> {
   const qs = new URLSearchParams({ productId });
-  if (variantId) qs.set('variantId', variantId);
+  const cleanVariantId = normalizeVariantId(variantId);
+  if (cleanVariantId) qs.set('variantId', cleanVariantId);
   const res = await apiFetch(`/api/product-context?${qs.toString()}`);
   if (!res.ok) {
     throw new Error(`product-context failed (${res.status})`);
@@ -71,7 +75,7 @@ async function loadContext(
   return {
     product: {
       productId: snapshot.productId,
-      variantId: snapshot.variantId || variantId || '',
+      variantId: normalizeVariantId(snapshot.variantId) || cleanVariantId,
       name: snapshot.name || '',
       url: snapshot.url || '',
       image: snapshot.image || '',
@@ -94,6 +98,11 @@ async function loadContext(
           restockAt: json.override.restockAt
             ? String(json.override.restockAt)
             : undefined,
+          restockAction: ((): 'none' | 'in_stock' | 'in_stock_qty' => {
+            const a = String(json.override.restockAction || 'none').toLowerCase();
+            if (a === 'in_stock' || a === 'in_stock_qty') return a;
+            return 'none';
+          })(),
           lowStockThreshold:
             json.override.lowStockThreshold != null
               ? Number(json.override.lowStockThreshold)
@@ -164,7 +173,8 @@ class SmartAlertsPdpHost extends HTMLElement {
   private async refresh() {
     const productId = this.getAttribute('product-id') || '';
     if (!productId || !this.root) return;
-    const variantId = this.getAttribute('selected-variant-id') || '';
+    // Wix sets selected-variant-id="undefined" before option pick — ignore it.
+    const variantId = normalizeVariantId(this.getAttribute('selected-variant-id'));
     const contextKey = `${productId}::${variantId}`;
 
     // Always allow variant changes to re-fetch. Drop stale responses via gen.
@@ -299,14 +309,22 @@ class SmartAlertsPdpHost extends HTMLElement {
       );
     }
 
-    // Countdown is only for OOS variants — hide as soon as the SKU is sellable.
-    if (
+    // Restock countdown belongs in Urgency (product-page-details-2), not Buttons.
+    const restockTargetMs = data.override?.restockAt
+      ? new Date(data.override.restockAt).getTime()
+      : NaN;
+    const restockAction = data.override?.restockAction || 'none';
+    // "Do nothing" timers that already ended should stay hidden (no reload loop).
+    const restockStillCounting =
+      Number.isFinite(restockTargetMs) &&
+      (restockAction !== 'none' || restockTargetMs > Date.now());
+    const canShowRestockTimer =
       !data.product.inStock &&
       !data.product.selectionRequired &&
-      data.modules.restockCountdown &&
-      data.override?.restockAt
-    ) {
-      const target = new Date(data.override.restockAt).getTime();
+      (data.modules.restockCountdown || Boolean(data.override?.restockAt)) &&
+      restockStillCounting;
+    if (canShowRestockTimer) {
+      const target = restockTargetMs;
       const ms = Math.max(0, target - Date.now());
       const hours = Math.floor(ms / 3600000);
       const mins = Math.floor((ms % 3600000) / 60000);
@@ -497,7 +515,7 @@ class SmartAlertsPdpHost extends HTMLElement {
       }
 
       parts.push(`
-        <div id="sa-restock-timer" data-target="${target}" data-show-secs="${showSecs ? '1' : '0'}" style="margin:8px 0;">
+        <div id="sa-restock-timer" data-sa-restock-timer="1" data-target="${target}" data-show-secs="${showSecs ? '1' : '0'}" style="margin:8px 0;">
           <style>
             @keyframes sa-timer-ping {
               0% { transform: scale(1); opacity: 0.8; }
@@ -634,20 +652,26 @@ class SmartAlertsPdpHost extends HTMLElement {
       this.timerInterval = null;
     }
 
-    if (mode === 'urgency') {
-    const timerEl = this.root.querySelector('#sa-restock-timer') as HTMLElement | null;
+    // Timer may live in buttons and/or urgency slots — bind whichever is present.
+    {
+    const timerEl = this.root.querySelector(
+      '[data-sa-restock-timer="1"]',
+    ) as HTMLElement | null;
     if (timerEl && data.override?.restockAt) {
       const targetTime = new Date(data.override.restockAt).getTime();
       const showSecs = data.appearance?.timerShowSeconds !== false;
       const productId = data.product.productId;
       const variantId = data.product.variantId || '';
+      const restockAction = data.override.restockAction || 'none';
+      const appliesInventory = restockAction === 'in_stock' || restockAction === 'in_stock_qty';
 
-      // At ~5s left: write inventory in the background while the countdown keeps running.
-      // At 0: wait 3s more, then refresh so Add to Cart is visible.
+      // Inventory actions: write ~5s early, then reload so Add to Cart appears.
+      // "Do nothing": just hide the countdown — never reload (avoids refresh loops).
       const RESTOCK_EARLY_MS = 5000;
       const POST_ZERO_RELOAD_MS = 3000;
 
       const fireEarlyRestock = () => {
+        if (!appliesInventory) return;
         if (this.restockEarlyFired || this.restockTickInFlight || !productId) return;
         this.restockEarlyFired = true;
         this.restockTickInFlight = true;
@@ -677,6 +701,16 @@ class SmartAlertsPdpHost extends HTMLElement {
           .finally(() => {
             this.restockTickInFlight = false;
           });
+      };
+
+      const hideTimerOnly = () => {
+        if (this.restockReloadScheduled) return;
+        this.restockReloadScheduled = true;
+        if (this.timerInterval) {
+          clearInterval(this.timerInterval);
+          this.timerInterval = null;
+        }
+        timerEl.remove();
       };
 
       const scheduleReloadAfterZero = () => {
@@ -716,22 +750,25 @@ class SmartAlertsPdpHost extends HTMLElement {
           timeEl.textContent = `${h}h ${m}m${showSecs ? ` ${sStr}s` : ''}`;
         }
 
-        // ~5s left → update inventory; timer keeps counting.
-        if (remaining > 0 && remaining <= RESTOCK_EARLY_MS) {
+        if (appliesInventory && remaining > 0 && remaining <= RESTOCK_EARLY_MS) {
           fireEarlyRestock();
         }
 
-        // Hit 0 → hold briefly, then refresh the PDP.
         if (remaining <= 0) {
-          // If the page loaded already past zero, still try one inventory apply.
-          if (!this.restockEarlyFired) fireEarlyRestock();
-          scheduleReloadAfterZero();
+          if (appliesInventory) {
+            if (!this.restockEarlyFired) fireEarlyRestock();
+            scheduleReloadAfterZero();
+          } else {
+            hideTimerOnly();
+          }
         }
       };
       updateClock();
-      this.timerInterval = setInterval(updateClock, 1000);
+      if (!this.restockReloadScheduled) {
+        this.timerInterval = setInterval(updateClock, 1000);
+      }
     }
-    } // end mode === urgency timer bind
+    } // end restock timer bind
 
     if (mode !== 'buttons') return;
 
@@ -794,7 +831,8 @@ class SmartAlertsPdpHost extends HTMLElement {
       try {
         // Re-read selection at click time so switching variants doesn't reuse a stale row.
         const liveVariantId =
-          this.getAttribute('selected-variant-id') || product.variantId || '';
+          normalizeVariantId(this.getAttribute('selected-variant-id')) ||
+          normalizeVariantId(product.variantId);
         const res = await this.apiFetch('/api/subscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -876,7 +914,8 @@ class SmartAlertsPdpHost extends HTMLElement {
       try {
         // Fresh variant + catalog price at submit (server also re-reads live price).
         const liveVariantId =
-          this.getAttribute('selected-variant-id') || product.variantId || '';
+          normalizeVariantId(this.getAttribute('selected-variant-id')) ||
+          normalizeVariantId(product.variantId);
         let watchedPrice = Number(product.price || 0);
         try {
           const fresh = await loadContext(

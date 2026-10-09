@@ -128,6 +128,17 @@ export function variantKey(v: CatalogVariantRaw | null | undefined): string {
   return String(v?._id || v?.id || '').trim();
 }
 
+/**
+ * Normalize variant ids from URL/attrs/API bodies.
+ * Wix PDP slots often set `selected-variant-id="undefined"` before a real
+ * SKU is chosen — treat that as no selection so simple + multi-SKU paths work.
+ */
+export function normalizeVariantId(raw: unknown): string {
+  const v = String(raw ?? '').trim();
+  if (!v || v === 'undefined' || v === 'null') return '';
+  return v;
+}
+
 /** Human-readable option choices, e.g. `Color: Blue · Size: M`. */
 export function formatVariantChoices(variant: CatalogVariantRaw | null | undefined): string {
   if (!variant?.choices?.length) return '';
