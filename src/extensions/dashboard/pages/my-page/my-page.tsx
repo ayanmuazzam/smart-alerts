@@ -27,6 +27,7 @@ import { EmailCustomizationScreen, type TemplateForm } from './screens/EmailCust
 import { StorefrontCustomizationScreen } from './screens/StorefrontCustomizationScreen';
 import { LogsAndQuotaScreen } from './screens/LogsAndQuotaScreen';
 import { SupportWidget } from './components/SupportWidget';
+import { GuideWidget } from './components/GuideWidget';
 import type { AlertChannelFilter } from './components/LogsAndQuotaWorkspace';
 
 /** Former floating "My alerts" corner button — disable on sites that still have it embedded. */
@@ -807,7 +808,8 @@ export default function SmartAlertsPage() {
           <Box direction="vertical" gap="SP4">
             {/* Scrolls away with content — not in Page.Tail */}
             <SupportWidget />
-            {/* Sticks below header after the support card scrolls out */}
+            <GuideWidget />
+            {/* Sticks below header after the support/guide cards scroll out */}
             <Page.Sticky>
               <Box backgroundColor="D70" paddingBottom="SP2">
                 <Tabs

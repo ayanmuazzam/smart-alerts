@@ -55,6 +55,71 @@ type ContextView = {
   globalLowStockThreshold: number;
 };
 
+const SESSION_CACHE_KEY = 'sa-pdp-shell-v2';
+
+type ShellCache = {
+  modules: Record<string, boolean>;
+  appearance?: ContextView['appearance'];
+  globalLowStockThreshold?: number;
+};
+
+function readShellCache(): ShellCache | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ShellCache;
+    if (!parsed?.modules) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeShellCache(ctx: ContextView): void {
+  try {
+    const payload: ShellCache = {
+      modules: ctx.modules,
+      appearance: ctx.appearance,
+      globalLowStockThreshold: ctx.globalLowStockThreshold,
+    };
+    sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function patchShellModules(modules: Record<string, boolean>): void {
+  try {
+    const prev = readShellCache();
+    const payload: ShellCache = {
+      modules: { ...(prev?.modules || {}), ...modules },
+      appearance: prev?.appearance,
+      globalLowStockThreshold: prev?.globalLowStockThreshold,
+    };
+    sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Notify Me skeleton only — price-drop is for in-stock PDPs and must not flash on OOS. */
+function backInStockEnabled(modules?: Record<string, boolean> | null): boolean {
+  return Boolean(modules?.backInStock);
+}
+
+/** Buttons slot only — urgency often renders nothing, so no skeleton there. */
+function skeletonHtml(): string {
+  const pulse = `
+@keyframes sa-skel-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.9; }
+}`;
+  return `<style>${pulse}</style>
+    <div aria-busy="true" aria-live="polite" style="margin:8px 0;">
+      <div style="height:48px;width:100%;border-radius:4px;background:#E5E7EB;animation:sa-skel-pulse 1.2s ease-in-out infinite;"></div>
+    </div>`;
+}
+
 async function loadContext(
   endpoint: (path: string) => string,
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>,
@@ -72,7 +137,7 @@ async function loadContext(
   const snapshot = json.product;
   if (!snapshot?.productId) return null;
 
-  return {
+  const ctx: ContextView = {
     product: {
       productId: snapshot.productId,
       variantId: normalizeVariantId(snapshot.variantId) || cleanVariantId,
@@ -112,6 +177,8 @@ async function loadContext(
       : null,
     globalLowStockThreshold: Number(json.globalLowStockThreshold ?? 5),
   };
+  writeShellCache(ctx);
+  return ctx;
 }
 
 export function createPdpElement(mode: PdpSlotMode) {
@@ -129,6 +196,8 @@ class SmartAlertsPdpHost extends HTMLElement {
   private restockTickInFlight = false;
   private restockEarlyFired = false;
   private restockReloadScheduled = false;
+  /** True while waiting on product-context (skeleton/blank shell only). */
+  private shellPending = false;
 
   connectedCallback() {
     if (!this.root) {
@@ -170,6 +239,31 @@ class SmartAlertsPdpHost extends HTMLElement {
     return fetchAppApi(this.endpoint(pathAndQuery), init);
   }
 
+  private showLoadingShell() {
+    if (!this.root) return;
+    // Stay blank until fresh public-config confirms Back In Stock is on.
+    // Never use stale session cache — it kept flashing after merchants paused the rule.
+    this.root.innerHTML = '';
+  }
+
+  /** Fresh modules from public-config; skeleton only when Back In Stock is enabled. */
+  private async syncModulesFromPublicConfig(gen: number): Promise<void> {
+    if (mode !== 'buttons') return;
+    try {
+      const res = await this.apiFetch('/api/public-config');
+      if (!res.ok || gen !== this.fetchGen) return;
+      const json = (await res.json()) as { modules?: Record<string, boolean> };
+      if (!json.modules || gen !== this.fetchGen) return;
+      const modules = { ...DEFAULT_MODULES, ...json.modules };
+      patchShellModules(modules);
+      if (gen !== this.fetchGen || !this.shellPending || !this.root) return;
+      // OOS Notify Me only — do not skeleton for price-drop (in-stock) on this slot.
+      this.root.innerHTML = backInStockEnabled(modules) ? skeletonHtml() : '';
+    } catch {
+      /* non-fatal — product-context will still resolve */
+    }
+  }
+
   private async refresh() {
     const productId = this.getAttribute('product-id') || '';
     if (!productId || !this.root) return;
@@ -188,9 +282,6 @@ class SmartAlertsPdpHost extends HTMLElement {
         clearInterval(this.timerInterval);
         this.timerInterval = null;
       }
-      // Drop Notify me / price-drop / timer immediately so the previous variant's
-      // UI does not linger while the new product-context loads.
-      this.root.innerHTML = '';
       document.body.style.overflow = '';
       if (this.escHandler) {
         document.removeEventListener('keydown', this.escHandler);
@@ -200,6 +291,14 @@ class SmartAlertsPdpHost extends HTMLElement {
         clearTimeout(this.successCloseTimer);
         this.successCloseTimer = null;
       }
+      // Soft load: skeleton only when CTA modules are known-enabled.
+      this.shellPending = true;
+      this.showLoadingShell();
+      void this.syncModulesFromPublicConfig(gen);
+    } else if (!this.root.childNodes.length) {
+      this.shellPending = true;
+      this.showLoadingShell();
+      void this.syncModulesFromPublicConfig(gen);
     }
 
     try {
@@ -210,6 +309,7 @@ class SmartAlertsPdpHost extends HTMLElement {
         variantId,
       );
       if (gen !== this.fetchGen) return;
+      this.shellPending = false;
       if (!ctx) {
         this.root.innerHTML =
           '<div style="font-size:12px;color:#64748B;margin:8px 0;">Alerts unavailable for this product.</div>';
@@ -218,9 +318,10 @@ class SmartAlertsPdpHost extends HTMLElement {
       this.render(ctx);
     } catch (err) {
       if (gen !== this.fetchGen) return;
+      this.shellPending = false;
       console.error('[smart-alerts-pdp-slot]', err);
-      // Last-resort: still show subscribe UI with defaults so OAuth/API issues
-      // do not blank the storefront widget.
+      // Prefer last good shell cache; fall back to defaults so the slot never blanks.
+      const cached = readShellCache();
       try {
         this.render({
           product: {
@@ -233,15 +334,15 @@ class SmartAlertsPdpHost extends HTMLElement {
             inStock: false,
             quantity: null,
           },
-          modules: { ...DEFAULT_MODULES },
-          appearance: {
+          modules: cached?.modules || { ...DEFAULT_MODULES },
+          appearance: cached?.appearance || {
             ...DEFAULT_APPEARANCE,
             colors: { ...DEFAULT_APPEARANCE.colors },
             buttons: mergeButtons(),
             modal: mergeModal(),
           },
           override: null,
-          globalLowStockThreshold: 5,
+          globalLowStockThreshold: cached?.globalLowStockThreshold ?? 5,
         });
       } catch (renderErr) {
         console.error('[smart-alerts-pdp-slot] fallback render failed', renderErr);

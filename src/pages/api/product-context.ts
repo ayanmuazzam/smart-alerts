@@ -1,8 +1,5 @@
 import type { APIRoute } from 'astro';
 import { getOrCreateConfig, isModuleEnabled } from '../../lib/smart-alerts/config';
-import { items } from '@wix/data';
-import { auth } from '@wix/essentials';
-import { COLLECTIONS } from '../../lib/smart-alerts/constants';
 import {
   getProductSnapshot,
   getStorefrontOverride,
@@ -19,10 +16,13 @@ export const GET: APIRoute = async ({ request }) => {
       return Response.json({ error: 'productId required' }, { status: 400 });
     }
 
-    const config = await getOrCreateConfig();
-    const snapshot = await getProductSnapshot(productId, variantId);
-    // Simple: snapshot resolves the sole catalog variant id (Tracker is variant-scoped).
-    // Multi-SKU: use the selected variant id; empty until options are chosen.
+    // Config and catalog snapshot are independent — fetch in parallel.
+    const [config, snapshot] = await Promise.all([
+      getOrCreateConfig(),
+      getProductSnapshot(productId, variantId),
+    ]);
+
+    // Override needs the resolved variant id from the snapshot when available.
     const overrideVariantId = normalizeVariantId(snapshot?.variantId) || variantId;
     const override = await getStorefrontOverride(productId, overrideVariantId);
 
@@ -42,48 +42,6 @@ export const GET: APIRoute = async ({ request }) => {
         isModuleEnabled(config, 'restockCountdown') || Boolean(restockAt),
       manualWhatsapp: isModuleEnabled(config, 'manualWhatsapp'),
     };
-
-    // Debug: list every override row so missing timers are diagnosable in the terminal.
-    let overrideRows: Array<{ variantId: string; restockAt: string | null; tracked?: boolean }> =
-      [];
-    try {
-      const query = auth.elevate(items.query);
-      const listed = await query(COLLECTIONS.productOverrides)
-        .eq('productId', productId)
-        .limit(20)
-        .find();
-      overrideRows = (listed.items || []).map((row: Record<string, unknown>) => {
-        const at = row.restockAt;
-        let restockIso: string | null = null;
-        if (at) {
-          const d = new Date(at as string | Date);
-          restockIso = Number.isFinite(d.getTime()) ? d.toISOString() : String(at);
-        }
-        return {
-          variantId: String(row.variantId || ''),
-          restockAt: restockIso,
-          tracked: Boolean(row.tracked),
-        };
-      });
-    } catch (err) {
-      console.warn('[smart-alerts] override list failed', err);
-    }
-
-    console.log('[smart-alerts] product-context', {
-      productId,
-      name: snapshot?.name,
-      reqVariantId: variantId || '',
-      snapVariantId: snapshot?.variantId || '',
-      inStock: snapshot?.inStock,
-      selectionRequired: snapshot?.selectionRequired,
-      restockCountdown: modules.restockCountdown,
-      restockAt,
-      overrideRows,
-      showTimer:
-        Boolean(snapshot && !snapshot.inStock && !snapshot.selectionRequired) &&
-        modules.restockCountdown &&
-        Boolean(restockAt),
-    });
 
     return Response.json({
       product: snapshot,
