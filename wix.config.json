@@ -1,7 +1,7 @@
 {
-  "appId": "8a35a26c-308b-4874-9748-db811867b828",
-  "projectId": "us-smart-alerts",
-  "namespace": "@ayanmuazzam/us-smart-alerts",
-  "codeIdentifier": "us_smart_alerts",
+  "appId": "3f1b42ce-e299-42ef-95cb-11b9ad267f1f",
+  "projectId": "fme-smart-alerts",
+  "namespace": "@info87281988/fme-smart-alerts",
+  "codeIdentifier": "fme_smart_alerts",
   "projectType": "App"
 }

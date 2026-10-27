@@ -1,5 +1,5 @@
 /** App namespace from wix.config.json — must match Dev Center namespace. */
-export const APP_NAMESPACE = '@ayanmuazzam/us-smart-alerts';
+export const APP_NAMESPACE = '@info87281988/fme-smart-alerts';
 
 export const COLLECTIONS = {
   config: `${APP_NAMESPACE}/config`,
@@ -31,7 +31,7 @@ export const PLAN_PRODUCT_IDS = {
 export const PLAN_OVERRIDE: 'basic' | 'pro' | null = null;
 
 /** Used for in-dashboard upgrade CTA. */
-export const WIX_APP_ID = '8a35a26c-308b-4874-9748-db811867b828';
+export const WIX_APP_ID = '3f1b42ce-e299-42ef-95cb-11b9ad267f1f';
 
 /**
  * Official Wix app pricing / billing page.
