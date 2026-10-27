@@ -9,6 +9,7 @@ type Props = {
   alerts: any[];
   alertsTotalCount?: number;
   onLoadMoreAlerts?: () => void;
+  alertsLoadingMore?: boolean;
   selectedAlerts: string[];
   setSelectedAlerts: (ids: string[] | ((prev: string[]) => string[])) => void;
   onDeleteSelectedAlerts: () => Promise<void>;
@@ -25,6 +26,7 @@ export function LogsAndQuotaScreen({
   alerts,
   alertsTotalCount,
   onLoadMoreAlerts,
+  alertsLoadingMore,
   selectedAlerts,
   setSelectedAlerts,
   onDeleteSelectedAlerts,
@@ -41,6 +43,7 @@ export function LogsAndQuotaScreen({
       alerts={alerts}
       alertsTotalCount={alertsTotalCount}
       onLoadMore={onLoadMoreAlerts}
+      loadingMore={alertsLoadingMore}
       selectedAlerts={selectedAlerts}
       setSelectedAlerts={setSelectedAlerts}
       onDeleteSelectedAlerts={onDeleteSelectedAlerts}

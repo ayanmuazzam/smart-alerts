@@ -24,12 +24,15 @@ import {
 } from '@wix/wix-ui-icons-common';
 import { EmptyOnboarding } from '../components/EmptyOnboarding';
 import { MonoIconBadge, type MonoIconTone } from '../components/MonoIconBadge';
+import type { PlanInfo } from '../components/SettingsWorkspace';
+import { UpgradeProBanner } from '../components/UpgradeProBanner';
 import type { AutomationSub, CustomizationSub } from '../adminApi';
 
 type Props = {
   kpis: Record<string, number> | null;
   activity: { id: string; kind: string; label: string; at?: string }[];
   config: any;
+  plan?: PlanInfo | null;
   onOpenAutomation: (sub: AutomationSub) => void;
   onOpenLogs: () => void;
   onOpenCustomization: (sub?: CustomizationSub) => void;
@@ -81,6 +84,7 @@ export function DashboardScreen({
   kpis,
   activity,
   config,
+  plan,
   onOpenAutomation,
   onOpenLogs,
   onOpenCustomization,
@@ -96,13 +100,15 @@ export function DashboardScreen({
   const watchingPrice = kpis.watchingPrice || 0;
   const pendingAlerts = kpis.pendingAlerts ?? kpis.whatsappPending ?? 0;
   const alertsSent = kpis.alertsSent ?? 0;
-  const quota = kpis.quota || 5000;
+  const quota = kpis.quota || 20;
   const remaining = kpis.remaining ?? quota;
   const used = kpis.used ?? Math.max(0, quota - remaining);
   const quotaPercent = Math.min(100, Math.round((used / (quota || 1)) * 100));
 
   return (
     <Box direction="vertical" gap="SP4">
+      <UpgradeProBanner plan={plan} />
+
       {/* 1. Sleek Store Alert Intelligence Header Banner */}
       <div
         style={{

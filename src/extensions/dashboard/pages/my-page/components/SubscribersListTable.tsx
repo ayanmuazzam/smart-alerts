@@ -7,6 +7,7 @@ import {
   Checkbox,
   EmptyState,
   Input,
+  Loader,
   Table,
   Text,
   TextButton,
@@ -50,6 +51,7 @@ export interface SubscribersListTableProps {
   listStateFilter?: string;
   setListStateFilter?: (s: string) => void;
   onLoadMore?: () => void;
+  loadingMore?: boolean;
   selectedSubs: string[];
   setSelectedSubs: (ids: string[] | ((prev: string[]) => string[])) => void;
   onExportCsv: () => Promise<void>;
@@ -70,6 +72,7 @@ export function SubscribersListTable({
   listStateFilter = '',
   setListStateFilter,
   onLoadMore,
+  loadingMore = false,
   selectedSubs,
   setSelectedSubs,
   onExportCsv,
@@ -978,8 +981,20 @@ export function SubscribersListTable({
             )}
             {onLoadMore && (listTotalCount ?? 0) > listItems.length ? (
               <Box marginTop="SP3" align="center">
-                <Button size="small" priority="secondary" onClick={onLoadMore}>
-                  Load more
+                <Button
+                  size="small"
+                  priority="secondary"
+                  disabled={loadingMore}
+                  onClick={onLoadMore}
+                >
+                  {loadingMore ? (
+                    <Box gap="SP2" verticalAlign="middle">
+                      <Loader size="tiny" />
+                      <span>Loading…</span>
+                    </Box>
+                  ) : (
+                    'Load more'
+                  )}
                 </Button>
               </Box>
             ) : null}

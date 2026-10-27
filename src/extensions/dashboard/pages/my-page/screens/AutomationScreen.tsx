@@ -27,6 +27,7 @@ import {
 } from '../components/InventoryTrackerWorkspace';
 import { WhatsAppQueueWorkspace } from '../components/WhatsAppQueueWorkspace';
 import { SettingsScreen } from './SettingsScreen';
+import type { PlanInfo } from '../components/SettingsWorkspace';
 import { MODULE_META, type AutomationSub, type ModuleMetaItem } from '../adminApi';
 
 type Props = {
@@ -47,6 +48,7 @@ type Props = {
   listStateFilter?: string;
   setListStateFilter?: (s: string) => void;
   onLoadMoreLists?: () => void;
+  listsLoadingMore?: boolean;
   selectedSubs: string[];
   setSelectedSubs: (ids: string[] | ((prev: string[]) => string[])) => void;
   whatsapp: any[];
@@ -70,6 +72,8 @@ type Props = {
   onGoSettings: () => void;
   onGoCustomization: (target?: 'email' | 'storefront', triggerType?: string) => void;
   adminPost: (body: Record<string, unknown>) => Promise<any>;
+  plan?: PlanInfo | null;
+  onPlanChange?: (plan: PlanInfo) => void;
   onSearchProducts: () => void;
   onRefreshInventory: () => Promise<void>;
   onResolveWhatsapp: (ids: string[], action: 'sent' | 'dismiss') => Promise<void>;
@@ -125,6 +129,7 @@ export function AutomationScreen(props: Props) {
     listStateFilter = '',
     setListStateFilter,
     onLoadMoreLists,
+    listsLoadingMore = false,
     selectedSubs,
     setSelectedSubs,
     whatsapp,
@@ -148,6 +153,8 @@ export function AutomationScreen(props: Props) {
     onGoSettings,
     onGoCustomization,
     adminPost,
+    plan,
+    onPlanChange,
     onSearchProducts,
     onRefreshInventory,
     onResolveWhatsapp,
@@ -473,6 +480,7 @@ export function AutomationScreen(props: Props) {
             listStateFilter={listStateFilter}
             setListStateFilter={setListStateFilter}
             onLoadMore={onLoadMoreLists}
+            loadingMore={listsLoadingMore}
             selectedSubs={selectedSubs}
             setSelectedSubs={setSelectedSubs}
             onExportCsv={async () => {
@@ -594,6 +602,8 @@ export function AutomationScreen(props: Props) {
             setConfig={setConfig}
             onRun={onRun}
             adminPost={adminPost}
+            plan={plan}
+            onPlanChange={onPlanChange}
           />
         ) : null}
           </>

@@ -2,9 +2,11 @@ import { items } from '@wix/data';
 import { auth } from '@wix/essentials';
 import {
   COLLECTIONS,
+  DEFAULT_QUOTA,
   getDefaultEmailTemplate,
   type AlertType,
 } from './constants';
+import { effectiveMonthlyQuota, getPlanEntitlements } from './billing';
 import { getOrCreateConfig, type SiteConfig } from './config';
 import { escapeHtml, safeHexColor, safeUrl } from './sanitize';
 import { sendWixTransactionalEmail } from './wix-email';
@@ -187,8 +189,9 @@ export async function countAlertsUsed(days = 30): Promise<number> {
 
 export async function canSendAlert(config?: SiteConfig): Promise<{ ok: boolean; used: number; remaining: number; quota: number }> {
   const cfg = config || (await getOrCreateConfig());
+  const plan = await getPlanEntitlements();
   const used = await countAlertsUsed(30);
-  const quota = cfg.monthlyAlertQuota || 5000;
+  const quota = effectiveMonthlyQuota(plan, cfg.monthlyAlertQuota ?? DEFAULT_QUOTA);
   return { ok: used < quota, used, remaining: Math.max(0, quota - used), quota };
 }
 

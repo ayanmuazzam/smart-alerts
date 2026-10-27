@@ -29,6 +29,7 @@ import { LogsAndQuotaScreen } from './screens/LogsAndQuotaScreen';
 import { SupportWidget } from './components/SupportWidget';
 import { GuideWidget } from './components/GuideWidget';
 import type { AlertChannelFilter } from './components/LogsAndQuotaWorkspace';
+import type { PlanInfo } from './components/SettingsWorkspace';
 
 /** Former floating "My alerts" corner button — disable on sites that still have it embedded. */
 const CORNER_EMBEDDED_SCRIPT_ID = 'f1428cdb-83d7-4ac1-b13d-91ee44f6d480';
@@ -49,6 +50,17 @@ type ToastItem = {
 
 function makeToastId() {
   return Math.random().toString(36).slice(2, 9);
+}
+
+function appendById<T extends { _id?: string }>(prev: T[], next: T[]): T[] {
+  const seen = new Set(prev.map((row) => String(row._id || '')));
+  const extra = next.filter((row) => {
+    const id = String(row._id || '');
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return extra.length ? [...prev, ...extra] : prev;
 }
 
 function formFromDefaults(triggerType: string): TemplateForm {
@@ -166,9 +178,12 @@ export default function SmartAlertsPage() {
   const [alerts, setAlerts] = useState<any[]>([]);
   const [alertsTotalCount, setAlertsTotalCount] = useState(0);
   const [alertsSkip, setAlertsSkip] = useState(0);
+  const [alertsLoadingMore, setAlertsLoadingMore] = useState(false);
+  const [listsLoadingMore, setListsLoadingMore] = useState(false);
   const [alertSearch, setAlertSearch] = useState('');
   const [alertChannelFilter, setAlertChannelFilter] = useState<AlertChannelFilter>('all');
   const [quota, setQuota] = useState<any>(null);
+  const [plan, setPlan] = useState<PlanInfo | null>(null);
   const [selectedAlerts, setSelectedAlerts] = useState<string[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [draftOverrides, setDraftOverrides] = useState<
@@ -195,6 +210,12 @@ export default function SmartAlertsPage() {
   alertSearchRef.current = alertSearch;
   const alertChannelFilterRef = useRef(alertChannelFilter);
   alertChannelFilterRef.current = alertChannelFilter;
+  const alertsSkipRef = useRef(alertsSkip);
+  alertsSkipRef.current = alertsSkip;
+  const listSkipRef = useRef(listSkip);
+  listSkipRef.current = listSkip;
+  const listStateFilterRef = useRef(listStateFilter);
+  listStateFilterRef.current = listStateFilter;
   const whatsappSearchRef = useRef(whatsappSearch);
   whatsappSearchRef.current = whatsappSearch;
 
@@ -227,12 +248,14 @@ export default function SmartAlertsPage() {
     setKpis(data.kpis);
     setActivity(data.activity || []);
     if (data.config) setConfig(data.config);
+    if (data.plan) setPlan(data.plan);
   }, []);
 
   const loadConfig = useCallback(async () => {
     const data = await adminGet('config');
     if (!data.config) throw new Error(data.error || 'Config unavailable');
     setConfig(data.config);
+    if (data.plan) setPlan(data.plan);
   }, []);
 
   const listSearchRef = useRef(listSearch);
@@ -241,8 +264,9 @@ export default function SmartAlertsPage() {
   const loadLists = useCallback(async (qOverride?: string, skipOverride?: number, stateOverride?: string, typeOverride?: string) => {
     const type = typeOverride || listType;
     const q = qOverride !== undefined ? qOverride : listSearchRef.current;
-    const skip = skipOverride !== undefined ? skipOverride : listSkip;
-    const state = stateOverride !== undefined ? stateOverride : listStateFilter;
+    const skip = skipOverride !== undefined ? skipOverride : listSkipRef.current;
+    const state = stateOverride !== undefined ? stateOverride : listStateFilterRef.current;
+    const append = skip > 0;
     const extra =
       `&type=${type}&limit=50&skip=${skip}` +
       (q ? `&q=${encodeURIComponent(q)}` : '') +
@@ -251,17 +275,21 @@ export default function SmartAlertsPage() {
     const items = data.items || [];
     const totalCount = data.totalCount ?? items.length;
     const nextSkip = data.skip ?? skip;
-    setListItems(items);
+    setListItems((prev) => {
+      const merged = append ? appendById(prev, items) : items;
+      listsCacheRef.current[type] = {
+        items: merged,
+        totalCount,
+        skip: nextSkip,
+        stateFilter: state,
+        search: q,
+      };
+      return merged;
+    });
     setListTotalCount(totalCount);
     setListSkip(nextSkip);
-    listsCacheRef.current[type] = {
-      items,
-      totalCount,
-      skip: nextSkip,
-      stateFilter: state,
-      search: q,
-    };
-  }, [listType, listSkip, listStateFilter]);
+    listSkipRef.current = nextSkip;
+  }, [listType]);
 
   const handleSetListType = (next: string) => {
     const current = listViewRef.current;
@@ -379,7 +407,8 @@ export default function SmartAlertsPage() {
   }, []);
 
   const loadAlerts = useCallback(async (skipOverride?: number) => {
-    const skip = skipOverride !== undefined ? skipOverride : alertsSkip;
+    const skip = skipOverride !== undefined ? skipOverride : alertsSkipRef.current;
+    const append = skip > 0;
     const q = alertSearchRef.current.trim();
     const channelFilter = alertChannelFilterRef.current;
     let extra = `&limit=50&skip=${skip}`;
@@ -390,11 +419,14 @@ export default function SmartAlertsPage() {
       extra += `&status=failed`;
     }
     const data = await adminGet('alerts', extra);
-    setAlerts(data.items || []);
-    setAlertsTotalCount(data.totalCount ?? (data.items || []).length);
-    setAlertsSkip(data.skip ?? skip);
+    const items = data.items || [];
+    const nextSkip = data.skip ?? skip;
+    setAlerts((prev) => (append ? appendById(prev, items) : items));
+    setAlertsTotalCount(data.totalCount ?? items.length);
+    setAlertsSkip(nextSkip);
+    alertsSkipRef.current = nextSkip;
     setQuota(data.quota);
-  }, [alertsSkip]);
+  }, []);
 
   const loadCurrent = useCallback(async () => {
     setLoading(true);
@@ -548,6 +580,7 @@ export default function SmartAlertsPage() {
         kpis={kpis}
         activity={activity}
         config={config}
+        plan={plan}
         onOpenAutomation={(sub) => {
           setAutomationSub(sub);
           setPrimary('automation');
@@ -580,6 +613,8 @@ export default function SmartAlertsPage() {
         onRetryLoad={() => loadCurrent()}
         config={config}
         setConfig={setConfig}
+        plan={plan}
+        onPlanChange={setPlan}
         listType={listType}
         setListType={handleSetListType}
         listSearch={listSearch}
@@ -593,11 +628,15 @@ export default function SmartAlertsPage() {
           setListSkip(0);
           loadLists(undefined, 0, state).catch(() => undefined);
         }}
+        listsLoadingMore={listsLoadingMore}
         onLoadMoreLists={() => {
+          if (listsLoadingMore) return;
           const next = listSkip + 50;
-          if (next < listTotalCount) {
-            loadLists(undefined, next).catch(() => undefined);
-          }
+          if (next >= listTotalCount) return;
+          setListsLoadingMore(true);
+          loadLists(undefined, next)
+            .catch(() => undefined)
+            .finally(() => setListsLoadingMore(false));
         }}
         selectedSubs={selectedSubs}
         setSelectedSubs={setSelectedSubs}
@@ -748,11 +787,15 @@ export default function SmartAlertsPage() {
         quota={quota}
         alerts={alerts}
         alertsTotalCount={alertsTotalCount}
+        alertsLoadingMore={alertsLoadingMore}
         onLoadMoreAlerts={() => {
+          if (alertsLoadingMore) return;
           const next = alertsSkip + 50;
-          if (next < alertsTotalCount) {
-            loadAlerts(next).catch(() => undefined);
-          }
+          if (next >= alertsTotalCount) return;
+          setAlertsLoadingMore(true);
+          loadAlerts(next)
+            .catch(() => undefined)
+            .finally(() => setAlertsLoadingMore(false));
         }}
         selectedAlerts={selectedAlerts}
         setSelectedAlerts={setSelectedAlerts}

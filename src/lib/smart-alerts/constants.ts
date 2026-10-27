@@ -13,7 +13,36 @@ export const COLLECTIONS = {
 
 export const CONFIG_SINGLETON_ID = 'site-config';
 
-export const DEFAULT_QUOTA = 5000;
+/** Free/Basic monthly alert cap. Pro can raise this in settings. */
+export const DEFAULT_QUOTA = 20;
+
+/** App Market pricing plan product IDs (Dev Center → Pricing Plans). */
+export const PLAN_PRODUCT_IDS = {
+  BASIC: 'basic',
+  PRO: 'pro',
+} as const;
+
+/**
+ * Local plan flip for testing freemium UI / quota.
+ * - `'basic'` → force Free/Basic (20 emails, settings locked)
+ * - `'pro'` → force Pro (settings unlocked)
+ * - `null` → use real Wix billing (set this for production release)
+ */
+export const PLAN_OVERRIDE: 'basic' | 'pro' | null = null;
+
+/** Used for in-dashboard upgrade CTA. */
+export const WIX_APP_ID = '8a35a26c-308b-4874-9748-db811867b828';
+
+/**
+ * Official Wix app pricing / billing page.
+ * Docs: https://dev.wix.com/docs/build-apps/launch-your-app/pricing-and-billing/set-up-a-wix-pricing-page
+ */
+export function buildAppUpgradeUrl(instanceId?: string | null): string {
+  const base = `https://www.wix.com/apps/upgrade/${WIX_APP_ID}`;
+  const id = String(instanceId || '').trim();
+  if (!id) return base;
+  return `${base}?appInstanceId=${encodeURIComponent(id)}`;
+}
 
 export const DEFAULT_NOTIFICATION_LIMITS = {
   maxEmailPerCustomerPerDay: 3,

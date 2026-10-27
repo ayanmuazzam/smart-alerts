@@ -8,15 +8,31 @@ import {
   Input,
   Layout,
   NumberInput,
+  SectionHelper,
+  TextButton,
 } from '@wix/design-system';
 import { SettingsSmall, Email } from '@wix/wix-ui-icons-common';
+import {
+  buildAppUpgradeUrl,
+  DEFAULT_QUOTA,
+} from '../../../../../lib/smart-alerts/constants';
 import { MonoIconBadge } from './MonoIconBadge';
+
+export type PlanInfo = {
+  isPro: boolean;
+  isFree: boolean;
+  productId: string;
+  instanceId?: string;
+  upgradeUrl?: string;
+  canEditAccountSettings: boolean;
+};
 
 export interface SettingsWorkspaceProps {
   config: any;
   setConfig: (updater: any) => void;
   onSavePatch: (patch: Record<string, unknown>, msg: string) => Promise<void> | void;
   onResetSettings: () => Promise<void> | void;
+  plan?: PlanInfo | null;
 }
 
 const FONT_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -26,10 +42,18 @@ export function SettingsWorkspace({
   setConfig,
   onSavePatch,
   onResetSettings,
+  plan,
 }: SettingsWorkspaceProps) {
   const [savingSection, setSavingSection] = useState<string | null>(null);
 
   if (!config) return null;
+
+  // Until plan loads, treat as locked (Basic) so Free users never see editable fields briefly.
+  const canEdit = plan != null && Boolean(plan.canEditAccountSettings);
+  const upgradeUrl = plan?.upgradeUrl || buildAppUpgradeUrl(plan?.instanceId);
+  const quotaValue = canEdit
+    ? Number(config.monthlyAlertQuota ?? DEFAULT_QUOTA)
+    : DEFAULT_QUOTA;
 
   const handleSave = async (section: string, patch: Record<string, unknown>, msg: string) => {
     setSavingSection(section);
@@ -68,6 +92,26 @@ export function SettingsWorkspace({
         </div>
       </div>
 
+      {!canEdit ? (
+        <SectionHelper appearance="warning" title={`Basic plan — ${DEFAULT_QUOTA} emails / month`}>
+          Seller email and monthly quota are locked on Basic. Upgrade to Pro to edit these
+          settings and raise your send limit.{' '}
+          <TextButton
+            size="small"
+            as="a"
+            href={upgradeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Upgrade to Pro
+          </TextButton>
+        </SectionHelper>
+      ) : (
+        <SectionHelper appearance="success" title="Pro plan">
+          You can edit seller notification email and set a custom monthly alert quota.
+        </SectionHelper>
+      )}
+
       <Card>
         <Card.Header
           title="Seller alerts &amp; quota"
@@ -81,6 +125,7 @@ export function SettingsWorkspace({
                 <Input
                   prefix={<Email size="16" />}
                   type="email"
+                  disabled={!canEdit}
                   value={config.sellerEmail || ''}
                   onChange={(e) =>
                     setConfig((c: any) => ({ ...c, sellerEmail: e.target.value }))
@@ -90,15 +135,23 @@ export function SettingsWorkspace({
               </FormField>
             </Cell>
             <Cell span={6}>
-              <FormField label="Monthly alert dispatch quota">
+              <FormField
+                label="Monthly alert dispatch quota"
+                infoContent={
+                  canEdit
+                    ? 'Maximum alerts this site can send per 30 days.'
+                    : 'Fixed at 20 on Basic. Upgrade to Pro to customize.'
+                }
+              >
                 <NumberInput
-                  min={100}
-                  step={500}
-                  value={config.monthlyAlertQuota ?? 5000}
+                  min={DEFAULT_QUOTA}
+                  step={canEdit ? 10 : 1}
+                  disabled={!canEdit}
+                  value={quotaValue}
                   onChange={(value) =>
                     setConfig((c: any) => ({
                       ...c,
-                      monthlyAlertQuota: Number(value ?? 5000),
+                      monthlyAlertQuota: Number(value ?? DEFAULT_QUOTA),
                     }))
                   }
                 />
@@ -111,7 +164,7 @@ export function SettingsWorkspace({
       <Box gap="SP3" verticalAlign="middle" align="space-between">
         <Button
           size="medium"
-          disabled={savingSection === 'general'}
+          disabled={!canEdit || savingSection === 'general'}
           onClick={() =>
             handleSave(
               'general',

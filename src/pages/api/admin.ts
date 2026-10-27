@@ -2,6 +2,11 @@ import type { APIRoute } from 'astro';
 import { items } from '@wix/data';
 import { auth } from '@wix/essentials';
 import { requireDashboardAuth } from '../../lib/smart-alerts/auth-guard';
+import {
+  gateAccountSettingsPatch,
+  getPlanEntitlements,
+  syncQuotaForPlan,
+} from '../../lib/smart-alerts/billing';
 import { getOrCreateConfig, updateConfig } from '../../lib/smart-alerts/config';
 import { canSendAlert, countAlertsUsed } from '../../lib/smart-alerts/email';
 import {
@@ -113,7 +118,7 @@ export const GET: APIRoute = async ({ request }) => {
   try {
     if (view === 'dashboard') {
       await ensureCatalogSeeded('first_open');
-      const config = await getOrCreateConfig();
+      const { entitlements: plan, config } = await syncQuotaForPlan();
       const quota = await canSendAlert(config);
       const query = auth.elevate(items.query);
       const [bis, price, wa, recentSubs, recentAlerts] = await Promise.all([
@@ -163,11 +168,13 @@ export const GET: APIRoute = async ({ request }) => {
           .sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime())
           .slice(0, 20),
         config,
+        plan,
       });
     }
 
     if (view === 'config') {
-      return Response.json({ config: await getOrCreateConfig() });
+      const { entitlements: plan, config } = await syncQuotaForPlan();
+      return Response.json({ config, plan });
     }
 
     if (view === 'lists') {
@@ -357,8 +364,16 @@ export const POST: APIRoute = async ({ request }) => {
     const action = body.action as string;
 
     if (action === 'saveConfig') {
-      const config = await updateConfig(body.patch || {});
-      return Response.json({ config });
+      const plan = await getPlanEntitlements();
+      const patch = gateAccountSettingsPatch(
+        { ...((body.patch || {}) as Record<string, unknown>) },
+        plan,
+      );
+      let config = await updateConfig(patch as Parameters<typeof updateConfig>[0]);
+      if (!plan.isPro && config.monthlyAlertQuota !== DEFAULT_QUOTA) {
+        config = await updateConfig({ monthlyAlertQuota: DEFAULT_QUOTA });
+      }
+      return Response.json({ config, plan });
     }
 
     if (action === 'saveTemplate') {
@@ -530,6 +545,7 @@ export const POST: APIRoute = async ({ request }) => {
     }
 
     if (action === 'resetSettings') {
+      const plan = await getPlanEntitlements();
       const config = await updateConfig({
         modules: { ...DEFAULT_MODULES },
         appearance: { ...DEFAULT_APPEARANCE },
@@ -545,7 +561,7 @@ export const POST: APIRoute = async ({ request }) => {
         whatsappSetup: { ...DEFAULT_WHATSAPP_SETUP },
         syncSettings: { ...DEFAULT_SYNC_SETTINGS },
       });
-      return Response.json({ config });
+      return Response.json({ config, plan });
     }
 
     if (action === 'removeWhatsapp') {

@@ -7,6 +7,7 @@ import {
   Checkbox,
   EmptyState,
   Input,
+  Loader,
   Table,
   Text,
 } from '@wix/design-system';
@@ -42,6 +43,7 @@ export interface LogsAndQuotaWorkspaceProps {
   alerts: AlertHistoryItem[];
   alertsTotalCount?: number;
   onLoadMore?: () => void;
+  loadingMore?: boolean;
   selectedAlerts: string[];
   setSelectedAlerts: (ids: string[] | ((prev: string[]) => string[])) => void;
   onDeleteSelectedAlerts: () => Promise<void>;
@@ -87,6 +89,7 @@ export function LogsAndQuotaWorkspace({
   alerts,
   alertsTotalCount,
   onLoadMore,
+  loadingMore = false,
   selectedAlerts,
   setSelectedAlerts,
   onDeleteSelectedAlerts,
@@ -100,7 +103,7 @@ export function LogsAndQuotaWorkspace({
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Quota computations
-  const quotaTotal = Number(quota?.quota || 5000);
+  const quotaTotal = Number(quota?.quota || 20); // Basic default; API returns plan-aware quota
   const quotaRemaining = Number(quota?.remaining ?? quotaTotal);
   const quotaUsed = Number(quota?.used ?? Math.max(0, quotaTotal - quotaRemaining));
   const quotaPercent = Math.min(100, Math.round((quotaUsed / (quotaTotal || 1)) * 100));
@@ -720,8 +723,20 @@ export function LogsAndQuotaWorkspace({
             )}
             {onLoadMore && (alertsTotalCount ?? 0) > alerts.length ? (
               <Box marginTop="SP3" align="center">
-                <Button size="small" priority="secondary" onClick={onLoadMore}>
-                  Load more
+                <Button
+                  size="small"
+                  priority="secondary"
+                  disabled={loadingMore}
+                  onClick={onLoadMore}
+                >
+                  {loadingMore ? (
+                    <Box gap="SP2" verticalAlign="middle">
+                      <Loader size="tiny" />
+                      <span>Loading…</span>
+                    </Box>
+                  ) : (
+                    'Load more'
+                  )}
                 </Button>
               </Box>
             ) : null}
